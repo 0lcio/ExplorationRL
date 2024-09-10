@@ -42,7 +42,7 @@ def train(episodes, render, strategy):
     train_data = defaultdict(list)
     callback = RewardLoggerCallback()
     base_model, ig_model = load_models()
-    env = create_env(size=10, step=500, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
+    env = create_env(size=30, step=1200, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
 
     model_dqn = DQN("MlpPolicy", env, verbose=1)
     model_dqn.learn(total_timesteps=episodes, callback=callback)
@@ -61,7 +61,7 @@ def train(episodes, render, strategy):
 def test(render, strategy, initial_seed=42, num_runs=10):
     test_data = defaultdict(list)
     base_model, ig_model = load_models()
-    env = create_env(size=10, step=500, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
+    env = create_env(size=30, step=1200, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
 
     model_dqn = DQN.load(f"./data/{strategy}/dqn_exploration_{strategy}")
 
@@ -139,6 +139,5 @@ def test(render, strategy, initial_seed=42, num_runs=10):
 
 
 strategy = sys.argv[1]
-# 50000
-train(episodes=15000, render=False, strategy=strategy)
-test(render=True, strategy=strategy, initial_seed=42, num_runs=10)
+train(episodes=50000, render=False, strategy=strategy)
+test(render=False, strategy=strategy, initial_seed=42, num_runs=20)
