@@ -3,7 +3,7 @@ import json
 import matplotlib.pyplot as plt
 
 
-def plot_metrics(data, xlabel, ylabel, title, legend_labels=None, save_path=None):
+def plot_metrics(data, xlabel, ylabel, title, legend_labels=None, save_path=None, marker="o"):
     plt.figure(figsize=(10, 6))
     for i, values in enumerate(data):
         plt.plot(values, label=legend_labels[i] if legend_labels else None, marker="o")

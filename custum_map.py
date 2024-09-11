@@ -187,7 +187,7 @@ class GridMappingEnv(gym.Env):
         input_tensor = torch.tensor(input_array)
 
         if len(observed_indices) != 9:
-            if self.strategy == 'pred_random':
+            if self.strategy == 'pred_random' or self.strategy == "pred_random_agent":
                 next_best_pov = torch.randint(0, 9, (1,)).item()
             else:
                 ig_prediction = self.ig_model(input_tensor)[self.strategy]
