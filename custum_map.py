@@ -55,7 +55,10 @@ class GridMappingEnv(gym.Env):
         )
         self.agent_pos = [1, 1]
         self._assign_ids_to_cells()
-        self._update_pov_ig(self.agent_pos)
+        if self.strategy == 'pred_ig_reward':
+            self._update_pov_ig(self.agent_pos)
+        else:
+            self._update_pov(self.agent_pos)
         self.current_steps = 0
 
         if self.render_mode == 'human':
@@ -90,8 +93,11 @@ class GridMappingEnv(gym.Env):
             self.agent_pos[1] = max(self.agent_pos[1] - 1, 0)
 
         # Calcola il reward
-        reward = self._update_pov_ig(self.agent_pos)
-        # reward = self._calculate_reward(new_pov_observed, best_next_pov_visited, prev_pos)
+        if self.strategy == 'pred_ig_reward':
+            reward = self._update_pov_ig(self.agent_pos)
+        else:
+            new_pov_observed, best_next_pov_visited = self._update_pov(self.agent_pos)
+            reward = self._calculate_reward(new_pov_observed, best_next_pov_visited, prev_pos)
 
         # Verifica combinata delle condizioni per terminare l'episodio
         all_cells_correct = True
