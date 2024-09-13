@@ -1,4 +1,5 @@
 import json
+import math
 
 import matplotlib.pyplot as plt
 
@@ -28,3 +29,14 @@ def read_dict(file_path):
         load_dictionary = json.load(file)
 
     return load_dictionary
+
+
+def entropy(probabilities):
+    """Calcola l'entropia di una lista di probabilità."""
+    return -sum(p * math.log2(p) for p in probabilities if p > 0)
+
+
+def information_gain(obs):
+    """Calcola l'information gain dato un'osservazione."""
+    prob_uni = [1 / 8] * 8  # Distribuzione uniforme iniziale
+    return entropy(prob_uni) - entropy(obs)

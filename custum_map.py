@@ -5,6 +5,8 @@ import numpy as np
 import pygame
 import pandas as pd
 
+from helper import information_gain
+
 
 class GridMappingEnv(gym.Env):
     metadata = {'render.modes': ['human']}
@@ -53,7 +55,7 @@ class GridMappingEnv(gym.Env):
         )
         self.agent_pos = [1, 1]
         self._assign_ids_to_cells()
-        self._update_pov(self.agent_pos)
+        self._update_pov_ig(self.agent_pos)
         self.current_steps = 0
 
         if self.render_mode == 'human':
@@ -88,8 +90,8 @@ class GridMappingEnv(gym.Env):
             self.agent_pos[1] = max(self.agent_pos[1] - 1, 0)
 
         # Calcola il reward
-        new_pov_observed, best_next_pov_visited = self._update_pov(self.agent_pos)
-        reward = self._calculate_reward(new_pov_observed, best_next_pov_visited, prev_pos)
+        reward = self._update_pov_ig(self.agent_pos)
+        # reward = self._calculate_reward(new_pov_observed, best_next_pov_visited, prev_pos)
 
         # Verifica combinata delle condizioni per terminare l'episodio
         all_cells_correct = True
@@ -132,6 +134,48 @@ class GridMappingEnv(gym.Env):
         #             cell = self.state[nx, ny]
         #             if sum(cell['pov']) != 9 and cell['marker_pred'] == 0:
         #                 reward += 2
+
+        return reward
+
+    def _update_pov_ig(self, agent_pos):
+        ax, ay = agent_pos
+        grid_min, grid_max = 1, self.n
+        reward = 0
+
+        for i in range(-1, 2):
+            for j in range(-1, 2):
+                nx, ny = ax + i, ay + j
+                if grid_min <= nx <= grid_max and grid_min <= ny <= grid_max:
+                    cell = self.state[nx, ny]
+                    pov_index = (i + 1) * 3 + (j + 1)
+                    if cell['pov'][pov_index] == 0:
+                        cell['pov'][pov_index] = 1
+
+                    observed_indices = np.flatnonzero(cell['pov'])
+
+                    input_list = []
+                    filtered_data = self.dataset[
+                        (self.dataset["IMAGE_ID"] == cell["id"]['IMAGE_ID']) &
+                        (self.dataset["BOX_COUNT"] == cell["id"]['BOX_COUNT']) &
+                        (self.dataset["MARKER_COUNT"] == cell["id"]['MARKER_COUNT'])
+                        ]
+
+                    for pov in observed_indices:
+                        row = filtered_data[filtered_data["POV_ID"] == pov + 1]
+                        if not row.empty:
+                            dist_prob = np.array([row[f"P{i}"] for i in range(8)]).flatten()
+                            pov_id_hot = np.zeros(9)
+                            pov_id_hot[pov] = 1
+                            input_list.append(np.concatenate((pov_id_hot, dist_prob)))
+
+                    input_array = np.array(input_list, dtype=np.float32)
+                    input_tensor = torch.tensor(input_array)
+
+                    base_model_pred = self.base_model(input_tensor)
+                    reward += information_gain(base_model_pred)
+
+                    if torch.argmax(base_model_pred, 1) == cell["id"]['MARKER_COUNT']:
+                        cell['marker_pred'] = 1
 
         return reward
 
