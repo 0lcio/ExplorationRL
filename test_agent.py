@@ -4,7 +4,7 @@ from collections import defaultdict
 import random
 
 import torch
-from stable_baselines3 import DQN
+from stable_baselines3 import DQN, A2C
 
 from base_model import netCounterBase
 from callback import RewardLoggerCallback
@@ -45,9 +45,9 @@ def train(episodes, render, strategy):
     train_data = defaultdict(list)
     callback = RewardLoggerCallback()
     base_model, ig_model = load_models()
-    env = create_env(size=20, step=1000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
+    env = create_env(size=10, step=500, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
 
-    model_dqn = DQN("MlpPolicy", env, verbose=1)
+    model_dqn = A2C("MlpPolicy", env, verbose=1)
     model_dqn.learn(total_timesteps=episodes, callback=callback)
 
     train_data["episode_rewards"] = callback.episode_rewards
@@ -64,9 +64,9 @@ def train(episodes, render, strategy):
 def test(render, strategy, initial_seed=42, num_runs=10):
     test_data = defaultdict(list)
     base_model, ig_model = load_models()
-    env = create_env(size=20, step=1000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
+    env = create_env(size=10, step=500, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
     if strategy != "random_agent":
-        model_dqn = DQN.load(f"./data/{strategy}/dqn_exploration_{strategy}")
+        model_dqn = A2C.load(f"./data/{strategy}/dqn_exploration_{strategy}")
 
     # Lista per tenere traccia delle metriche per ogni run
     cumulative_rewards_per_run = []
@@ -85,7 +85,7 @@ def test(render, strategy, initial_seed=42, num_runs=10):
             if strategy != "random_agent":
                 action, _states = model_dqn.predict(obs)
             else:
-                action = random.randint(0, 3)
+                action = env.action_space.sample()
             obs, reward, terminated, truncated, info = env.step(action)
 
             cumulative_reward += reward
@@ -145,5 +145,5 @@ def test(render, strategy, initial_seed=42, num_runs=10):
 
 
 strategy = sys.argv[1]
-train(episodes=50000, render=False, strategy=strategy)
+train(episodes=50000, render=True, strategy=strategy)
 test(render=False, strategy=strategy, initial_seed=42, num_runs=20)
