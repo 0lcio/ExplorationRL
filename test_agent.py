@@ -1,10 +1,9 @@
 import os
 import sys
 from collections import defaultdict
-import random
 
 import torch
-from stable_baselines3 import DQN, A2C
+from stable_baselines3 import DQN
 
 from base_model import netCounterBase
 from callback import RewardLoggerCallback
@@ -39,6 +38,54 @@ def create_env(size, step, base_model, ig_model, strategy, render=False):
     return env
 
 
+def train_with_curriculum(render, strategy):
+    if strategy == "random_agent":
+        return
+
+    base_model, ig_model = load_models()
+    curriculum = [
+        {"size": 5, "steps": 250, "episodes": 5000},
+        {"size": 10, "steps": 500, "episodes": 10000},
+        {"size": 20, "steps": 1000, "episodes": 20000},
+        {"size": 30, "steps": 1200, "episodes": 40000},
+    ]
+
+    train_data = defaultdict(list)
+    model_dqn = None  # Inizializza il modello come None per il trasferimento
+
+    for level in curriculum:
+        size = level["size"]
+        max_steps = level["steps"]
+        episodes = level["episodes"]
+        print(f"Training on environment {size}x{size} for {episodes} time steps.")
+
+        # Creazione dell'ambiente per il livello corrente
+        env = create_env(size=size, step=max_steps, base_model=base_model, ig_model=ig_model, render=render,
+                         strategy=strategy)
+        callback = RewardLoggerCallback()
+
+        # Se il modello è già stato addestrato a un livello precedente, usalo come punto di partenza
+        if model_dqn is None:
+            model_dqn = DQN("MlpPolicy", env, verbose=1)  # Crea un nuovo modello se è il primo livello
+        else:
+            model_dqn.set_env(env)  # Imposta l'ambiente aggiornato sul modello esistente
+
+        # Addestra il modello per il numero di episodi specificato per il livello corrente
+        model_dqn.learn(total_timesteps=episodes, callback=callback)
+
+        # Salvataggio dei dati di addestramento
+        train_data["episode_rewards"].extend(callback.episode_rewards)
+        train_data["episode_cells_marker_pred_1"].extend(callback.episode_cells_marker_pred_1)
+        train_data["episode_cells_seen_pov"].extend(callback.episode_cells_seen_pov)
+        train_data["episode_steps"].extend(callback.episode_steps)
+
+        # Salvataggio del modello dopo ogni livello di addestramento
+        model_dqn.save(f"./data/{strategy}/dqn_exploration_{strategy}_level_{size}")
+
+    # Salva tutti i dati di addestramento cumulativi
+    save_dict(train_data, f"./data/{strategy}/train_data_{strategy}_curriculum.json")
+
+
 def train(episodes, render, strategy):
     if strategy == "random_agent":
         return
@@ -47,7 +94,7 @@ def train(episodes, render, strategy):
     base_model, ig_model = load_models()
     env = create_env(size=10, step=500, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
 
-    model_dqn = A2C("MlpPolicy", env, verbose=1)
+    model_dqn = DQN("MlpPolicy", env, verbose=1)
     model_dqn.learn(total_timesteps=episodes, callback=callback)
 
     train_data["episode_rewards"] = callback.episode_rewards
@@ -64,9 +111,9 @@ def train(episodes, render, strategy):
 def test(render, strategy, initial_seed=42, num_runs=10):
     test_data = defaultdict(list)
     base_model, ig_model = load_models()
-    env = create_env(size=10, step=500, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
+    env = create_env(size=30, step=1200, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
     if strategy != "random_agent":
-        model_dqn = A2C.load(f"./data/{strategy}/dqn_exploration_{strategy}")
+        model_dqn = DQN.load(f"./data/{strategy}/dqn_exploration_{strategy}")
 
     # Lista per tenere traccia delle metriche per ogni run
     cumulative_rewards_per_run = []
@@ -145,5 +192,6 @@ def test(render, strategy, initial_seed=42, num_runs=10):
 
 
 strategy = sys.argv[1]
-train(episodes=50000, render=True, strategy=strategy)
+# train(episodes=50000, render=False, strategy=strategy)
+train_with_curriculum(render=False, strategy=strategy)
 test(render=False, strategy=strategy, initial_seed=42, num_runs=20)

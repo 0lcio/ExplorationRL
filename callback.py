@@ -70,13 +70,13 @@ class RewardLoggerCallback(BaseCallback):
 
     def _count_new_cells_seen_pov(self, env):
         """
-        Conta le nuove celle viste da 0 punti di vista differenti nell'ambiente.
+        Conta le nuove celle viste da 9 punti di vista differenti nell'ambiente.
         Ritorna l'insieme di coordinate delle celle nuove.
         """
         new_cells = set()
         for x in range(1, env.unwrapped.n + 1):
             for y in range(1, env.unwrapped.n + 1):
-                if sum(env.unwrapped.state[x, y]['pov']) == 0:
+                if sum(env.unwrapped.state[x, y]['pov']) == 9:
                     if (x, y) not in self.cells_seen_pov_set:
                         new_cells.add((x, y))
         return new_cells
