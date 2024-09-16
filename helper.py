@@ -60,7 +60,7 @@ def load_models():
         base_model.load_state_dict(torch.load(base_model_path))
         ig_model.load_state_dict(torch.load(ig_model_path))
     else:
-        base_model.load_state_dict(torch.load(base_model_path, map_location=torch.device('cpu'), weights_only=False))
-        ig_model.load_state_dict(torch.load(ig_model_path, map_location=torch.device('cpu'), weights_only=False))
+        base_model.load_state_dict(torch.load(base_model_path, map_location=torch.device('cpu')))
+        ig_model.load_state_dict(torch.load(ig_model_path, map_location=torch.device('cpu')))
 
     return base_model, ig_model

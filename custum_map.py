@@ -19,8 +19,10 @@ class GridMappingEnv(gym.Env):
         self.ig_model = ig_model  # Modello per il miglior punto di vista successivo
         self.base_model = base_model  # Modello per la stima dello stato delle celle
         self.state = np.array(
-            [[{'pov': np.zeros(9, dtype=np.int32), 'best_next_pov': -1, 'id': None, 'marker_pred': 0}
-              for _ in range(self.grid_size)] for _ in range(self.grid_size)])
+            [[{'pov': np.zeros(9, dtype=np.int32), 'best_next_pov': -1, 'id': None, 'marker_pred': 0,
+               'obs': np.zeros((9, 17), dtype=np.float32)}
+              for _ in range(self.grid_size)] for _ in range(self.grid_size)]
+        )
         self.agent_pos = [1, 1]  # Posizione iniziale dell'agente
         self.max_steps = max_steps
         self.current_steps = 0
@@ -28,7 +30,7 @@ class GridMappingEnv(gym.Env):
 
         # Spazio d'azione e osservazione
         self.action_space = spaces.Discrete(4)
-        self.observation_space = spaces.Box(low=0, high=1, shape=(3, 3, 9), dtype=np.int32)
+        self.observation_space = spaces.Box(low=0, high=1, shape=(3, 3, 9, 17), dtype=np.float32)
 
         # Caricamento dataset
         self.dataset = pd.read_csv(dataset_path)
@@ -41,7 +43,6 @@ class GridMappingEnv(gym.Env):
 
         # Selezione della strategia
         self.strategy = f"pred_{strategy}"
-        # self.unexplored_cells_count = n * n * 9
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -50,13 +51,14 @@ class GridMappingEnv(gym.Env):
 
         # Resetta stato e agent position
         self.state = np.array(
-            [[{'pov': np.zeros(9, dtype=np.int32), 'best_next_pov': -1, 'id': None, 'marker_pred': 0}
+            [[{'pov': np.zeros(9, dtype=np.int32), 'best_next_pov': -1, 'id': None, 'marker_pred': 0,
+               'obs': np.zeros((9, 17), dtype=np.float32)}
               for _ in range(self.grid_size)] for _ in range(self.grid_size)]
         )
         self.agent_pos = [1, 1]
         self._assign_ids_to_cells()
         if self.strategy == 'pred_ig_reward':
-            self._update_pov_ig(self.agent_pos)
+            self._update_pov_ig(self.agent_pos, self.agent_pos)
         else:
             self._update_pov(self.agent_pos)
         self.current_steps = 0
@@ -78,11 +80,31 @@ class GridMappingEnv(gym.Env):
 
     def step(self, action):
         self.current_steps += 1
-
-        # Salva la posizione precedente
         prev_pos = list(self.agent_pos)
 
         # Esegui l'azione
+        self._move_agent(action)
+
+        # Calcola il reward
+        if self.strategy == 'pred_ig_reward':
+            reward = self._update_pov_ig(self.agent_pos, prev_pos)
+        else:
+            new_pov_observed, best_next_pov_visited = self._update_pov(self.agent_pos)
+            reward = self._calculate_reward(new_pov_observed, best_next_pov_visited, prev_pos)
+
+        # Verifica condizioni di terminazione
+        terminated = self._check_termination()
+        truncated = self.current_steps >= self.max_steps
+        if terminated:
+            reward += 30
+
+        if self.render_mode == 'human':
+            self.render()
+
+        return self._get_observation(), reward, terminated, truncated, {}
+
+    def _move_agent(self, action):
+        # Movimenti
         if action == 0:  # su
             self.agent_pos[0] = max(self.agent_pos[0] - 1, 0)
         elif action == 1:  # destra
@@ -92,97 +114,85 @@ class GridMappingEnv(gym.Env):
         elif action == 3:  # sinistra
             self.agent_pos[1] = max(self.agent_pos[1] - 1, 0)
 
-        # Calcola il reward
-        if self.strategy == 'pred_ig_reward':
-            reward = self._update_pov_ig(self.agent_pos)
-        else:
-            new_pov_observed, best_next_pov_visited = self._update_pov(self.agent_pos)
-            reward = self._calculate_reward(new_pov_observed, best_next_pov_visited, prev_pos)
-
-        # Verifica combinata delle condizioni per terminare l'episodio
-        all_cells_correct = True
-        all_wrong_cells_visited_9_pov = True
+    def _check_termination(self):
+        all_cells_correct, all_wrong_cells_visited_9_pov = True, True
 
         for row in self.state[1:self.n + 1, 1:self.n + 1]:
             for cell in row:
                 if cell['marker_pred'] == 0:
-                    all_cells_correct = False  # Trovata cella non corretta
-                    # Verifica se la cella non corretta è stata visitata da tutti e 9 i punti di vista
-                    if cell['marker_pred'] == 0 and sum(cell['pov']) != 9:
-                        all_wrong_cells_visited_9_pov = False  # Trovata cella non completamente visitata
-                        break  # Uscita anticipata, la condizione è falsa
+                    all_cells_correct = False
+                    if sum(cell['pov']) != 9:
+                        all_wrong_cells_visited_9_pov = False
+                        break
 
-        # Termina l'episodio se entrambe le condizioni sono soddisfatte
-        terminated = all_cells_correct or all_wrong_cells_visited_9_pov
-        truncated = self.current_steps >= self.max_steps
+        return all_cells_correct or all_wrong_cells_visited_9_pov
 
-        if terminated:
-            reward += 20
-
-        if self.render_mode == 'human':
-            self.render()
-
-        return self._get_observation(), reward, terminated, truncated, {}
-
-    def _calculate_reward(self, new_pov_observed, best_next_pov_visited, prev_pos):
-        # Inizializza il reward
-        reward = new_pov_observed * 1
-        reward += best_next_pov_visited * 8.0
-
-        # Penalizzazione se l'agente rimane fermo
-        if self.agent_pos == prev_pos:
-            reward -= 2  # Penalità per stato fermo
-
-        # for i in range(-1, 2):
-        #     for j in range(-1, 2):
-        #         nx, ny = self.agent_pos[0] + i, self.agent_pos[1] + j
-        #         if 1 <= nx <= self.n and 1 <= ny <= self.n:
-        #             cell = self.state[nx, ny]
-        #             if sum(cell['pov']) != 9 and cell['marker_pred'] == 0:
-        #                 reward += 2
-
-        return reward
-
-    def _update_pov_ig(self, agent_pos):
+    def _update_pov_ig(self, agent_pos, prev_pos):
         ax, ay = agent_pos
         grid_min, grid_max = 1, self.n
         reward = 0
 
+        # Cicla su tutte le celle intorno all'agente (3x3)
         for i in range(-1, 2):
             for j in range(-1, 2):
                 nx, ny = ax + i, ay + j
                 if grid_min <= nx <= grid_max and grid_min <= ny <= grid_max:
                     cell = self.state[nx, ny]
                     pov_index = (i + 1) * 3 + (j + 1)
-                    if cell['pov'][pov_index] == 0:
-                        cell['pov'][pov_index] = 1
 
+                    # Se il punto di vista è già stato osservato, non aggiungiamo il reward
+                    if cell['pov'][pov_index] == 1:
+                        continue  # Salta il calcolo per questa cella
+
+                    # Se non è stato osservato, lo segnamo come osservato
+                    cell['pov'][pov_index] = 1
+
+                    # Otteniamo gli indici dei punti di vista osservati
                     observed_indices = np.flatnonzero(cell['pov'])
 
-                    input_list = []
-                    filtered_data = self.dataset[
-                        (self.dataset["IMAGE_ID"] == cell["id"]['IMAGE_ID']) &
-                        (self.dataset["BOX_COUNT"] == cell["id"]['BOX_COUNT']) &
-                        (self.dataset["MARKER_COUNT"] == cell["id"]['MARKER_COUNT'])
-                        ]
+                    # Creiamo l'input array per il modello in base ai punti di vista osservati
+                    input_array = self._get_cell_input_array(cell, observed_indices)
 
-                    for pov in observed_indices:
-                        row = filtered_data[filtered_data["POV_ID"] == pov + 1]
-                        if not row.empty:
-                            dist_prob = np.array([row[f"P{i}"] for i in range(8)]).flatten()
-                            pov_id_hot = np.zeros(9)
-                            pov_id_hot[pov] = 1
-                            input_list.append(np.concatenate((pov_id_hot, dist_prob)))
+                    # Aggiorna la matrice 'obs' della cella
+                    m = input_array.shape[0]
+                    cell['obs'][:m, :] = input_array
 
-                    input_array = np.array(input_list, dtype=np.float32)
-                    input_tensor = torch.tensor(input_array)
-
-                    base_model_pred = self.base_model(input_tensor)
+                    # Calcoliamo l'information gain solo se si osserva da un nuovo punto di vista
+                    base_model_pred = self.base_model(torch.tensor(input_array))
                     reward += information_gain(base_model_pred)
 
+                    # Se il modello predice correttamente il marker, aggiorniamo la cella
                     if torch.argmax(base_model_pred, 1) == cell["id"]['MARKER_COUNT']:
                         cell['marker_pred'] = 1
 
+        # Penalità per restare nella stessa posizione
+        if self.agent_pos == prev_pos:
+            reward -= 2
+
+        return reward
+
+    def _get_cell_input_array(self, cell, observed_indices):
+        input_list = []
+        filtered_data = self.dataset[
+            (self.dataset["IMAGE_ID"] == cell["id"]['IMAGE_ID']) &
+            (self.dataset["BOX_COUNT"] == cell["id"]['BOX_COUNT']) &
+            (self.dataset["MARKER_COUNT"] == cell["id"]['MARKER_COUNT'])
+            ]
+
+        for pov in observed_indices:
+            row = filtered_data[filtered_data["POV_ID"] == pov + 1]
+            if not row.empty:
+                dist_prob = np.array([row[f"P{i}"] for i in range(8)]).flatten()
+                pov_id_hot = np.zeros(9)
+                pov_id_hot[pov] = 1
+                input_list.append(np.concatenate((pov_id_hot, dist_prob)))
+
+        return np.array(input_list, dtype=np.float32)
+
+    def _calculate_reward(self, new_pov_observed, best_next_pov_visited, prev_pos):
+        reward = new_pov_observed * 1 + best_next_pov_visited * 8.0
+        if self.agent_pos == prev_pos:
+            reward -= 2
         return reward
 
     def _update_pov(self, agent_pos):
@@ -236,6 +246,9 @@ class GridMappingEnv(gym.Env):
         input_array = np.array(input_list, dtype=np.float32)
         input_tensor = torch.tensor(input_array)
 
+        m = input_array.shape[0]
+        cell['obs'][:m, :] = input_array
+
         if len(observed_indices) != 9:
             if self.strategy == 'pred_random' or self.strategy == "pred_random_agent":
                 next_best_pov = torch.randint(0, 9, (1,)).item()
@@ -252,14 +265,18 @@ class GridMappingEnv(gym.Env):
             cell['marker_pred'] = 1
 
     def _get_observation(self):
-        obs = np.zeros((3, 3, 9), dtype=np.int32)
+        # Inizializza l'osservazione come array 3x3 di array con shape (9, 17)
+        obs = np.zeros((3, 3, 9, 17), dtype=np.float32)
         ax, ay = self.agent_pos
 
-        for i in range(-1, 2):
-            for j in range(-1, 2):
+        # Scansiona un'area 3x3 intorno alla posizione dell'agente
+        for i in range(-1, 2):  # Da -1 a 1 (inclusi)
+            for j in range(-1, 2):  # Da -1 a 1 (inclusi)
                 nx, ny = ax + i, ay + j
+                # Controlla che le coordinate siano all'interno dei limiti della griglia
                 if 0 <= nx < self.grid_size and 0 <= ny < self.grid_size:
-                    obs[i + 1, j + 1] = self.state[nx, ny]['pov']
+                    # Prende l'osservazione dalla cella corrente
+                    obs[i + 1, j + 1] = self.state[nx, ny]['obs']
 
         return obs
 

@@ -21,9 +21,9 @@ def train(episodes, render, strategy):
     train_data = defaultdict(list)
     callback = RewardLoggerCallback()
     base_model, ig_model = load_models()
-    env = create_env(size=10, step=500, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
+    env = create_env(size=20, step=1000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
 
-    model_dqn = DQN("MlpPolicy", env, verbose=1)
+    model_dqn = DQN("MlpPolicy", env, verbose=1, buffer_size=800000)
     model_dqn.learn(total_timesteps=episodes, callback=callback)
 
     train_data["episode_rewards"] = callback.episode_rewards
@@ -31,7 +31,7 @@ def train(episodes, render, strategy):
     train_data["episode_cells_seen_pov"] = callback.episode_cells_seen_pov
     train_data["episode_steps"] = callback.episode_steps
 
-    # save_dict(train_data, f"./data/{strategy}/train_data_{strategy}.json")
+    save_dict(train_data, f"./data/{strategy}/train_data_{strategy}.json")
 
     model_dqn.save(f"./data/{strategy}/dqn_exploration_{strategy}")
     del model_dqn
@@ -41,7 +41,7 @@ def test(render, strategy, initial_seed=42, num_runs=10):
     print("Test strategy: " + strategy)
     test_data = defaultdict(list)
     base_model, ig_model = load_models()
-    env = create_env(size=10, step=500, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
+    env = create_env(size=20, step=1000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
     if strategy != "random_agent":
         model_dqn = DQN.load(f"./data/{strategy}/dqn_exploration_{strategy}")
 
@@ -85,7 +85,7 @@ def test(render, strategy, initial_seed=42, num_runs=10):
 
         cells_seen_pov = sum(
             1 for row in env.state[1:env.n + 1, 1:env.n + 1]
-            for cell in row if sum(cell['pov']) == 0
+            for cell in row if sum(cell['pov']) == 9
         )
 
         # Salva le metriche per il run corrente
@@ -110,7 +110,7 @@ def test(render, strategy, initial_seed=42, num_runs=10):
     # Stampa le metriche
     print("Cumulative Rewards per Run:", cumulative_rewards_per_run)
     print("Cells with Correct Marker Prediction per Run:", cells_marker_pred_1_per_run)
-    print("Cells Seen from 0 POVs per Run:", cells_seen_pov_per_run)
+    print("Cells Seen from 9 POVs per Run:", cells_seen_pov_per_run)
 
     test_data["cells_marker_pred_1_mean"] = cells_marker_pred_1_mean
     test_data["cumulative_rewards_per_run"] = cumulative_rewards_per_run
@@ -122,5 +122,5 @@ def test(render, strategy, initial_seed=42, num_runs=10):
 
 
 strategy = sys.argv[1]
-train(episodes=50000, render=False, strategy=strategy)
+train(episodes=25000, render=False, strategy=strategy)
 test(render=True, strategy=strategy, initial_seed=42, num_runs=20)
