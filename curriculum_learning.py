@@ -22,13 +22,13 @@ def train(render, strategy):
     base_model, ig_model = load_models()
     curriculum = [
         {"size": 5, "steps": 250, "episodes": 5000},
-        {"size": 10, "steps": 500, "episodes": 10000},
-        {"size": 20, "steps": 1000, "episodes": 20000},
-        {"size": 30, "steps": 1200, "episodes": 40000},
+        {"size": 10, "steps": 500, "episodes": 15000},
+        {"size": 20, "steps": 1000, "episodes": 40000},
+        # {"size": 30, "steps": 1200, "episodes": 40000},
     ]
 
     train_data = defaultdict(list)
-    model_dqn = None  # Inizializza il modello come None per il trasferimento
+    model_dqn = None
 
     for level in curriculum:
         size = level["size"]
@@ -43,7 +43,7 @@ def train(render, strategy):
 
         # Se il modello è già stato addestrato a un livello precedente, usalo come punto di partenza
         if model_dqn is None:
-            model_dqn = DQN("MlpPolicy", env, verbose=1)  # Crea un nuovo modello se è il primo livello
+            model_dqn = DQN("MlpPolicy", env, verbose=1, buffer_size=800000)
         else:
             model_dqn.set_env(env)  # Imposta l'ambiente aggiornato sul modello esistente
 
@@ -57,18 +57,18 @@ def train(render, strategy):
         train_data["episode_steps"].extend(callback.episode_steps)
 
         # Salvataggio del modello dopo ogni livello di addestramento
-        model_dqn.save(f"./data/{strategy}/dqn_exploration_{strategy}_level_{size}")
+        model_dqn.save(f"./data/{strategy}_curriculum/dqn_exploration_{strategy}_level_{size}")
 
     # Salva tutti i dati di addestramento cumulativi
-    save_dict(train_data, f"./data/{strategy}/train_data_{strategy}_curriculum.json")
+    save_dict(train_data, f"./data/{strategy}_curriculum/train_data_{strategy}_curriculum.json")
 
 
 def test(render, strategy, initial_seed=42, num_runs=10):
     test_data = defaultdict(list)
     base_model, ig_model = load_models()
-    env = create_env(size=30, step=1200, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
+    env = create_env(size=20, step=1000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
     if strategy != "random_agent":
-        model_dqn = DQN.load(f"./data/{strategy}/dqn_exploration_{strategy}_level_30")
+        model_dqn = DQN.load(f"./data/{strategy}_curriculum/dqn_exploration_{strategy}_level_20")
 
     # Lista per tenere traccia delle metriche per ogni run
     cumulative_rewards_per_run = []
@@ -110,7 +110,7 @@ def test(render, strategy, initial_seed=42, num_runs=10):
 
         cells_seen_pov = sum(
             1 for row in env.state[1:env.n + 1, 1:env.n + 1]
-            for cell in row if sum(cell['pov']) == 0
+            for cell in row if sum(cell['pov']) == 9
         )
 
         # Salva le metriche per il run corrente
@@ -143,9 +143,9 @@ def test(render, strategy, initial_seed=42, num_runs=10):
     test_data["cells_seen_pov_per_run"] = cells_seen_pov_per_run
     test_data["total_steps_per_run"] = total_steps_per_run
 
-    save_dict(test_data, f"./data/{strategy}/test_data_{strategy}.json")
+    save_dict(test_data, f"./data/{strategy}_curriculum/test_data_{strategy}_curriculum.json")
 
 
-strategy = sys.argv[1]
-train(render=True, strategy=strategy)
+strategy = 'ig_reward'
+train(render=False, strategy=strategy)
 test(render=False, strategy=strategy, initial_seed=42, num_runs=20)

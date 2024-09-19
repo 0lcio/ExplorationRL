@@ -8,13 +8,17 @@ from constants import INPUT_SIZE, HIDDEN_SIZE, NUM_LAYERS, NUM_CLASSES_IG, NUM_C
 from ig_model import NetIG
 
 
-def plot_metrics(data, xlabel, ylabel, title, legend_labels=None, save_path=None, marker="o"):
+def plot_metrics(data, xlabel, ylabel, title=None, legend_labels=None, save_path=None, marker="o"):
     plt.figure(figsize=(10, 6))
     for i, values in enumerate(data):
-        plt.plot(values, label=legend_labels[i] if legend_labels else None, marker=marker)
+        if legend_labels and legend_labels[i] == "Random agent":
+            plt.plot(values, label=legend_labels[i], marker=marker, linestyle='--', color='red')
+        else:
+            plt.plot(values, label=legend_labels[i] if legend_labels else None, marker=marker)
     plt.xlabel(xlabel)
     plt.ylabel(ylabel)
-    plt.title(title)
+    if title:
+        plt.title(title)
     plt.grid(True)
     if legend_labels:
         plt.legend()
