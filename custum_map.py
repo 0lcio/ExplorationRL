@@ -217,9 +217,6 @@ class GridMappingEnv(gym.Env):
                         if cell['best_next_pov'] == pov_index:
                             best_next_pov_visited += 1
 
-                        # Riduci il contatore di celle non completamente esplorate
-                        # self.unexplored_cells_count -= 1
-
                     # Aggiornamento dello stato della cella
                     self._update_cell_state(cell)
 
@@ -265,7 +262,6 @@ class GridMappingEnv(gym.Env):
             cell['marker_pred'] = 1
 
     def _get_observation(self):
-        # Inizializza l'osservazione come array 3x3 di array con shape (9, 17)
         obs = np.zeros((3, 3, 9, 17), dtype=np.float32)
         ax, ay = self.agent_pos
 
