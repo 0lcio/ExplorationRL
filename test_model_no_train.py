@@ -1,11 +1,7 @@
-import sys
 from collections import defaultdict
-from datetime import datetime
-
-from stable_baselines3 import DQN
-from callback import RewardLoggerCallback
-from custum_map import GridMappingEnv
 from helper import save_dict, load_models
+from custum_map import GridMappingEnv
+from datetime import datetime
 
 
 def create_env(size, step, base_model, ig_model, strategy, render=False):
@@ -17,35 +13,13 @@ def create_env(size, step, base_model, ig_model, strategy, render=False):
     return env
 
 
-def train(episodes, render, strategy):
-    if strategy == "random_agent":
-        return
-    train_data = defaultdict(list)
-    callback = RewardLoggerCallback()
-    base_model, ig_model = load_models()
-    env = create_env(size=20, step=1000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
-
-    model_dqn = DQN("MlpPolicy", env, verbose=1, buffer_size=800000)
-    model_dqn.learn(total_timesteps=episodes, callback=callback)
-
-    train_data["episode_rewards"] = callback.episode_rewards
-    train_data["episode_cells_marker_pred_1"] = callback.episode_cells_marker_pred_1
-    train_data["episode_cells_seen_pov"] = callback.episode_cells_seen_pov
-    train_data["episode_steps"] = callback.episode_steps
-
-    save_dict(train_data, f"./data/{strategy}/train_data_{strategy}_{current_datetime}.json")
-
-    model_dqn.save(f"./data/{strategy}/dqn_exploration_{strategy}_{current_datetime}")
-    del model_dqn
-
-
 def test(render, strategy, initial_seed=42, num_runs=10):
+    current_datetime = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
     print("Test strategy: " + strategy)
     test_data = defaultdict(list)
     base_model, ig_model = load_models()
     env = create_env(size=20, step=1000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
-    if strategy != "random_agent":
-        model_dqn = DQN.load(f"./data/{strategy}/dqn_exploration_{strategy}")
 
     # Lista per tenere traccia delle metriche per ogni run
     cumulative_rewards_per_run = []
@@ -61,11 +35,18 @@ def test(render, strategy, initial_seed=42, num_runs=10):
         steps = 0
         cells_marker_pred_1_run = []
         while True:
-            if strategy != "random_agent":
-                action, _states = model_dqn.predict(obs)
-            else:
-                action = env.action_space.sample()
-            obs, reward, terminated, truncated, info = env.step(action)
+            each_action = [0, 1, 2, 3]
+            best_score = 0
+            for action in each_action:
+                action_score = env.step_score(action)
+                if action_score > best_score:
+                    best_score = action_score
+                    best_action = action
+
+            if best_score == 0:
+                best_action = env.action_space.sample()
+
+            obs, reward, terminated, truncated, info = env.step(best_action)
 
             cumulative_reward += reward
             steps += 1
@@ -123,7 +104,5 @@ def test(render, strategy, initial_seed=42, num_runs=10):
     save_dict(test_data, f"./data/{strategy}/test_data_{strategy}_{current_datetime}.json")
 
 
-current_datetime = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-strategy = sys.argv[1]
-train(episodes=25000, render=False, strategy=strategy)
+strategy = "no_train"
 test(render=True, strategy=strategy, initial_seed=42, num_runs=20)

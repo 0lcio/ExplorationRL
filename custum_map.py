@@ -57,10 +57,10 @@ class GridMappingEnv(gym.Env):
         )
         self.agent_pos = [1, 1]
         self._assign_ids_to_cells()
-        if self.strategy == 'pred_ig_reward':
+        if self.strategy == 'pred_ig_reward' or self.strategy == 'pred_no_train':
             self._update_pov_ig(self.agent_pos, self.agent_pos)
         else:
-            self._update_pov(self.agent_pos)
+            self._update_pov_best_view(self.agent_pos)
         self.current_steps = 0
 
         if self.render_mode == 'human':
@@ -78,6 +78,24 @@ class GridMappingEnv(gym.Env):
                     'MARKER_COUNT': random_row['MARKER_COUNT']
                 }
 
+    def step_score(self, action):
+        prev_pos = list(self.agent_pos)
+        temp_pos = list(self.agent_pos)
+
+        if action == 0:  # su
+            temp_pos[0] = max(self.agent_pos[0] - 1, 0)
+        elif action == 1:  # destra
+            temp_pos[1] = min(self.agent_pos[1] + 1, self.grid_size - 1)
+        elif action == 2:  # giù
+            temp_pos[0] = min(self.agent_pos[0] + 1, self.grid_size - 1)
+        elif action == 3:  # sinistra
+            temp_pos[1] = max(self.agent_pos[1] - 1, 0)
+
+        action_score = self._update_pov_ig(temp_pos, prev_pos, update=False)
+        action_score += 2
+
+        return action_score
+
     def step(self, action):
         self.current_steps += 1
         prev_pos = list(self.agent_pos)
@@ -86,11 +104,11 @@ class GridMappingEnv(gym.Env):
         self._move_agent(action)
 
         # Calcola il reward
-        if self.strategy == 'pred_ig_reward':
+        if self.strategy == 'pred_ig_reward' or self.strategy == 'pred_no_train':
             reward = self._update_pov_ig(self.agent_pos, prev_pos)
         else:
-            new_pov_observed, best_next_pov_visited = self._update_pov(self.agent_pos)
-            reward = self._calculate_reward(new_pov_observed, best_next_pov_visited, prev_pos)
+            new_pov_observed, best_next_pov_visited = self._update_pov_best_view(self.agent_pos)
+            reward = self._calculate_reward_best_view(new_pov_observed, best_next_pov_visited, prev_pos)
 
         # Verifica condizioni di terminazione
         terminated = self._check_termination()
@@ -127,10 +145,10 @@ class GridMappingEnv(gym.Env):
 
         return all_cells_correct or all_wrong_cells_visited_9_pov
 
-    def _update_pov_ig(self, agent_pos, prev_pos):
+    def _update_pov_ig(self, agent_pos, prev_pos, update=True):
         ax, ay = agent_pos
         grid_min, grid_max = 1, self.n
-        reward = 0
+        total_reward = 0
 
         # Cicla su tutte le celle intorno all'agente (3x3)
         for i in range(-1, 2):
@@ -138,36 +156,57 @@ class GridMappingEnv(gym.Env):
                 nx, ny = ax + i, ay + j
                 if grid_min <= nx <= grid_max and grid_min <= ny <= grid_max:
                     cell = self.state[nx, ny]
-                    pov_index = (i + 1) * 3 + (j + 1)
 
-                    # Se il punto di vista è già stato osservato, non aggiungiamo il reward
-                    if cell['pov'][pov_index] == 1:
-                        continue  # Salta il calcolo per questa cella
+                    # Aggiorna lo stato della cella e ottieni l'input array
+                    input_array = self._update_cell(cell, i, j, update=update)
 
-                    # Se non è stato osservato, lo segnamo come osservato
-                    cell['pov'][pov_index] = 1
-
-                    # Otteniamo gli indici dei punti di vista osservati
-                    observed_indices = np.flatnonzero(cell['pov'])
-
-                    # Creiamo l'input array per il modello in base ai punti di vista osservati
-                    input_array = self._get_cell_input_array(cell, observed_indices)
-
-                    # Aggiorna la matrice 'obs' della cella
-                    m = input_array.shape[0]
-                    cell['obs'][:m, :] = input_array
-
-                    # Calcoliamo l'information gain solo se si osserva da un nuovo punto di vista
-                    base_model_pred = self.base_model(torch.tensor(input_array))
-                    reward += information_gain(base_model_pred)
-
-                    # Se il modello predice correttamente il marker, aggiorniamo la cella
-                    if torch.argmax(base_model_pred, 1) == cell["id"]['MARKER_COUNT']:
-                        cell['marker_pred'] = 1
+                    # Se abbiamo un nuovo input (cioè una nuova osservazione), calcola il reward
+                    if isinstance(input_array, np.ndarray) and input_array.size > 0:
+                        total_reward += self._calculate_reward_ig(cell, input_array, update)
 
         # Penalità per restare nella stessa posizione
         if self.agent_pos == prev_pos:
-            reward -= 2
+            total_reward -= 2
+
+        return total_reward
+
+    def _update_cell(self, cell, i, j, update):
+        pov_index = (i + 1) * 3 + (j + 1)
+
+        # Se il punto di vista è già stato osservato, non aggiornare
+        if cell['pov'][pov_index] == 1:
+            return 0  # Nessun reward aggiunto se già osservato
+
+        cell_povs = cell['pov'].copy()
+        cell_povs[pov_index] = 1
+        # Aggiorna lo stato di osservazione
+        if update:
+            cell['pov'][pov_index] = 1
+
+        # Ottieni gli indici dei punti di vista osservati
+        observed_indices = np.flatnonzero(cell_povs)
+
+        # Crea l'input array per il modello in base ai punti di vista osservati
+        input_array = self._get_cell_input_array(cell, observed_indices)
+
+        # Aggiorna la matrice 'obs' della cella
+        if update:
+            m = input_array.shape[0]
+            cell['obs'][:m, :] = input_array
+
+        return input_array
+
+    def _calculate_reward_ig(self, cell, input_array, update=True):
+        reward = 0
+
+        # Calcola l'information gain solo se si osserva da un nuovo punto di vista
+        base_model_pred = self.base_model(torch.tensor(input_array))
+        reward += information_gain(base_model_pred)
+
+        # Se il modello predice correttamente il marker, aggiorna lo stato della cella
+        if torch.argmax(base_model_pred, 1) == cell["id"]['MARKER_COUNT']:
+            if update:
+                cell['marker_pred'] = 1
 
         return reward
 
@@ -189,13 +228,13 @@ class GridMappingEnv(gym.Env):
 
         return np.array(input_list, dtype=np.float32)
 
-    def _calculate_reward(self, new_pov_observed, best_next_pov_visited, prev_pos):
+    def _calculate_reward_best_view(self, new_pov_observed, best_next_pov_visited, prev_pos):
         reward = new_pov_observed * 1 + best_next_pov_visited * 8.0
         if self.agent_pos == prev_pos:
             reward -= 2
         return reward
 
-    def _update_pov(self, agent_pos):
+    def _update_pov_best_view(self, agent_pos):
         ax, ay = agent_pos
         new_pov_count = 0
         best_next_pov_visited = 0
