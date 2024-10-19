@@ -209,3 +209,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+__pycache__
+.idea
+data/final_output.csv
+data/fold_1_saved_base_model.pth
+data/fold_1_saved_ig_model_global_MSE_entropy_loss_head.pth

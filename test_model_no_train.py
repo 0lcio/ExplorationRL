@@ -105,4 +105,4 @@ def test(render, strategy, initial_seed=42, num_runs=10):
 
 
 strategy = "no_train"
-test(render=True, strategy=strategy, initial_seed=42, num_runs=20)
+test(render=False, strategy=strategy, initial_seed=42, num_runs=20)

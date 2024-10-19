@@ -146,6 +146,6 @@ def test(render, strategy, initial_seed=42, num_runs=10):
     save_dict(test_data, f"./data/{strategy}_curriculum/test_data_{strategy}_curriculum.json")
 
 
-strategy = 'ig_reward'
+strategy = 'policy2_ig_reward'
 train(render=False, strategy=strategy)
 test(render=False, strategy=strategy, initial_seed=42, num_runs=20)

@@ -60,7 +60,7 @@ class NetIG(nn.Module):
         # outputs['pred_marker_last_pov'] = torch.reshape(prediction[0], (128, 8))
         outputs['pred_marker_last_pov'] = prediction[0]
 
-        # predizione della loss per ogniuno dei 9 POV
+        # predizione della policy1_loss per ogniuno dei 9 POV
         # outputs['pred_loss'] = torch.reshape(prediction[1], (128, 9))
         outputs['pred_loss'] = torch.exp(prediction[1])
 
