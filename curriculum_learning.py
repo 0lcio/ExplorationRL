@@ -1,9 +1,10 @@
-import sys
 from collections import defaultdict
 from stable_baselines3 import DQN
 from callback import RewardLoggerCallback
 from custum_map import GridMappingEnv
 from helper import save_dict, load_models
+import tqdm as tqdm
+import numpy as np
 
 
 def create_env(size, step, base_model, ig_model, strategy, render=False):
@@ -16,6 +17,7 @@ def create_env(size, step, base_model, ig_model, strategy, render=False):
 
 
 def train(render, strategy):
+    print("Start train")
     if strategy == "random_agent":
         return
 
@@ -61,14 +63,18 @@ def train(render, strategy):
 
     # Salva tutti i dati di addestramento cumulativi
     save_dict(train_data, f"./data/{strategy}_curriculum/train_data_{strategy}_curriculum.json")
+    print("Stop train")
 
 
 def test(render, strategy, initial_seed=42, num_runs=10):
+    print("Test strategy: " + strategy)
+    dir_path = strategy
+    strategy = 'ig_reward'
     test_data = defaultdict(list)
     base_model, ig_model = load_models()
     env = create_env(size=20, step=1000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
     if strategy != "random_agent":
-        model_dqn = DQN.load(f"./data/{strategy}_curriculum/dqn_exploration_{strategy}_level_20")
+        model_dqn = DQN.load(f"./data/{dir_path}_curriculum/dqn_exploration_{strategy}_level_20")
 
     # Lista per tenere traccia delle metriche per ogni run
     cumulative_rewards_per_run = []
@@ -77,7 +83,7 @@ def test(render, strategy, initial_seed=42, num_runs=10):
     total_steps_per_run = []
     cells_marker_pred_1_each_step = []
 
-    for run in range(num_runs):
+    for run in tqdm.tqdm(range(num_runs)):
         seed = initial_seed + run
         obs, info = env.reset(seed=seed)
         cumulative_reward = 0.0
@@ -121,31 +127,33 @@ def test(render, strategy, initial_seed=42, num_runs=10):
 
     max_length = max(len(sotto_lista) for sotto_lista in cells_marker_pred_1_each_step)
 
-    somme = [0] * max_length
-    conteggi = [0] * max_length
+    # Shape: (run, step)
+    # Creazione di un array 2D con padding di NaN per le liste più corte
+    data_padded = np.full((len(cells_marker_pred_1_each_step), max_length), np.nan)
 
-    # Sommare gli elementi corrispondenti di ogni lista
-    for sotto_lista in cells_marker_pred_1_each_step:
-        for i, valore in enumerate(sotto_lista):
-            somme[i] += valore
-            conteggi[i] += 1
+    # Riempire con i valori reali disponibili
+    for i, lst in enumerate(cells_marker_pred_1_each_step):
+        data_padded[i, :len(lst)] = lst  # Copia i valori effettivi
 
-    # Calcolare la media per ogni posizione
-    cells_marker_pred_1_mean = [somme[i] / conteggi[i] for i in range(max_length)]
+    # Calcola la deviazione standard e media ignorando i NaN
+    cells_marker_pred_1_std = np.nanstd(data_padded, axis=0, ddof=1)
+    cells_marker_pred_1_mean = np.nanmean(data_padded, axis=0)
+
     # Stampa le metriche
     print("Cumulative Rewards per Run:", cumulative_rewards_per_run)
     print("Cells with Correct Marker Prediction per Run:", cells_marker_pred_1_per_run)
     print("Cells Seen from 0 POVs per Run:", cells_seen_pov_per_run)
 
-    test_data["cells_marker_pred_1_mean"] = cells_marker_pred_1_mean
+    test_data["cells_marker_pred_1_mean"] = cells_marker_pred_1_mean.tolist()
+    test_data["cells_marker_pred_1_std"] = cells_marker_pred_1_std.tolist()
     test_data["cumulative_rewards_per_run"] = cumulative_rewards_per_run
     test_data["cells_marker_pred_1_per_run"] = cells_marker_pred_1_per_run
     test_data["cells_seen_pov_per_run"] = cells_seen_pov_per_run
     test_data["total_steps_per_run"] = total_steps_per_run
 
-    save_dict(test_data, f"./data/{strategy}_curriculum/test_data_{strategy}_curriculum.json")
+    save_dict(test_data, f"./data/{dir_path}_curriculum/test_data_{strategy}_curriculum.json")
 
 
 strategy = 'policy2_ig_reward'
-train(render=False, strategy=strategy)
+# train(render=False, strategy=strategy)
 test(render=False, strategy=strategy, initial_seed=42, num_runs=20)
