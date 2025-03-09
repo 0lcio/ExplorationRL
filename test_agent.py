@@ -30,6 +30,10 @@ def train(episodes, render, strategy):
     base_model, ig_model = load_models()
     env = create_env(size=20, step=1000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
 
+    # MlpPolicy: rete completamente connessa (https://stable-baselines3.readthedocs.io/en/master/guide/custom_policy.html)
+    # input: obs --> [3, 3, 9, 17] ---> flatten = 459
+    # dim hidden layer --> 64 units
+    # output: action --> 4
     model_dqn = DQN("MlpPolicy", env, verbose=1, buffer_size=800000)
     model_dqn.learn(total_timesteps=episodes, callback=callback)
 
@@ -66,6 +70,7 @@ def test(render, strategy, initial_seed=42, num_runs=10):
     cells_seen_pov_per_run = []
     total_steps_per_run = []
     cells_marker_pred_1_each_step = []
+    total_position_per_run = []
 
     for run in tqdm.tqdm(range(num_runs)):
         seed = initial_seed + run
@@ -73,6 +78,9 @@ def test(render, strategy, initial_seed=42, num_runs=10):
         cumulative_reward = 0.0
         steps = 0
         cells_marker_pred_1_run = []
+        # Per memorizzare la posizione dell'agente a ogni step
+        positions = [env.agent_pos.copy()]
+
         while True:
             if strategy != "random_agent":
                 action, _states = model_dqn.predict(obs)
@@ -82,6 +90,9 @@ def test(render, strategy, initial_seed=42, num_runs=10):
 
             cumulative_reward += reward
             steps += 1
+            pos = env.agent_pos.copy()
+            positions.append(pos)
+
             cells_marker_pred_1_run.append(sum(
                 1 for row in env.state[1:env.n + 1, 1:env.n + 1]
                 for cell in row if cell['marker_pred'] == 1
@@ -91,6 +102,8 @@ def test(render, strategy, initial_seed=42, num_runs=10):
                 break
 
         cells_marker_pred_1_each_step.append(cells_marker_pred_1_run)
+
+        total_position_per_run.append(positions)
 
         # Aggiorna il conteggio delle celle viste da 9 punti di vista e delle celle con marker predetto corretto
         cells_marker_pred_1 = sum(
@@ -134,6 +147,7 @@ def test(render, strategy, initial_seed=42, num_runs=10):
     test_data["cells_marker_pred_1_per_run"] = cells_marker_pred_1_per_run
     test_data["cells_seen_pov_per_run"] = cells_seen_pov_per_run
     test_data["total_steps_per_run"] = total_steps_per_run
+    test_data["total_position_per_run"] = total_position_per_run
 
     save_dict(test_data, f"./data/{dir_path}/test_data_{strategy}_{current_datetime}.json")
 
