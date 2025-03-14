@@ -22,10 +22,15 @@ def create_env(size, step, base_model, ig_model, strategy, render=False):
 
 def train(episodes, render, strategy, device, buffer_size):
     dir_path = strategy
-    _, strategy = strategy.split("_")
     print("Start train")
     if strategy == "random_agent":
         return
+    
+    if strategy != 'policy2_ig_reward':
+        _, strategy = strategy.split("_")
+    else:
+        strategy = 'ig_reward'
+
     train_data = defaultdict(list)
     callback = RewardLoggerCallback()
     base_model, ig_model = load_models()
@@ -176,5 +181,5 @@ device = "cuda" if use_cuda else "cpu"
 buffer_size = 100_000 if use_cuda else 50_000
 episodes = 50_000 if use_cuda else 25_000
 
-train(episodes=25000, render=False, strategy=strategy, device=device, buffer_size=buffer_size)
+train(episodes=episodes, render=False, strategy=strategy, device=device, buffer_size=buffer_size)
 test(render=False, strategy=strategy, initial_seed=42, num_runs=20)
