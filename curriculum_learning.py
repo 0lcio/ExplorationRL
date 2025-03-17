@@ -1,10 +1,13 @@
 from collections import defaultdict
 from stable_baselines3 import DQN
 from callback import RewardLoggerCallback
+from custumCNN import CustomCNN
 from custum_map import GridMappingEnv
 from helper import save_dict, load_models
 import tqdm as tqdm
 import numpy as np
+from datetime import datetime
+import torch
 
 
 def create_env(size, step, base_model, ig_model, strategy, render=False):
@@ -16,7 +19,7 @@ def create_env(size, step, base_model, ig_model, strategy, render=False):
     return env
 
 
-def train(render, strategy):
+def train(render, strategy, dir):
     print("Start train")
     if strategy == "random_agent":
         return
@@ -45,7 +48,20 @@ def train(render, strategy):
 
         # Se il modello è già stato addestrato a un livello precedente, usalo come punto di partenza
         if model_dqn is None:
-            model_dqn = DQN("MlpPolicy", env, verbose=1, buffer_size=800000)
+            # model_dqn = DQN("MlpPolicy", env, verbose=1, buffer_size=800000)
+            policy_kwargs = dict(
+                features_extractor_class=CustomCNN,
+                features_extractor_kwargs=dict(features_dim=256),
+            )
+
+            model_dqn = DQN(
+                "CnnPolicy",
+                env,
+                policy_kwargs=policy_kwargs,
+                verbose=1,
+                buffer_size=800000,
+                device=device
+            )
         else:
             model_dqn.set_env(env)  # Imposta l'ambiente aggiornato sul modello esistente
 
@@ -59,22 +75,20 @@ def train(render, strategy):
         train_data["episode_steps"].extend(callback.episode_steps)
 
         # Salvataggio del modello dopo ogni livello di addestramento
-        model_dqn.save(f"./data/{strategy}_curriculum/dqn_exploration_{strategy}_level_{size}")
+        model_dqn.save(f"./data/{dir}_curriculum/dqn_exploration_{strategy}_level_{size}_cnn")
 
     # Salva tutti i dati di addestramento cumulativi
-    save_dict(train_data, f"./data/{strategy}_curriculum/train_data_{strategy}_curriculum.json")
+    save_dict(train_data, f"./data/{dir}_curriculum/train_data_{strategy}_curriculum_{current_datetime}.json")
     print("Stop train")
 
 
-def test(render, strategy, initial_seed=42, num_runs=10):
+def test(render, strategy, dir, initial_seed=42, num_runs=10):
     print("Test strategy: " + strategy)
-    dir_path = strategy
-    strategy = 'ig_reward'
     test_data = defaultdict(list)
     base_model, ig_model = load_models()
     env = create_env(size=20, step=1000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
     if strategy != "random_agent":
-        model_dqn = DQN.load(f"./data/{dir_path}_curriculum/dqn_exploration_{strategy}_level_20")
+        model_dqn = DQN.load(f"./data/{dir}_curriculum/dqn_exploration_{strategy}_level_20_cnn")
 
     # Lista per tenere traccia delle metriche per ogni run
     cumulative_rewards_per_run = []
@@ -161,9 +175,15 @@ def test(render, strategy, initial_seed=42, num_runs=10):
     test_data["total_steps_per_run"] = total_steps_per_run
     test_data["total_position_per_run"] = total_position_per_run
 
-    save_dict(test_data, f"./data/{dir_path}_curriculum/test_data_{strategy}_curriculum.json")
+    save_dict(test_data, f"./data/{dir}_curriculum/test_data_{strategy}_curriculum_{current_datetime}.json")
 
 
-strategy = 'policy2_ig_reward'
-# train(render=False, strategy=strategy)
-test(render=False, strategy=strategy, initial_seed=42, num_runs=20)
+current_datetime = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+use_cuda = torch.cuda.is_available()
+device = "cuda" if use_cuda else "cpu"
+
+strategy = 'ig_reward'
+dir = 'policy2_ig_reward'
+train(render=False, strategy=strategy, dir=dir)
+test(render=False, strategy=strategy, initial_seed=42, num_runs=20, dir=dir)
