@@ -5,7 +5,7 @@ import numpy as np
 import pygame
 import pandas as pd
 
-from helper import information_gain
+from helper import information_gain, entropy
 
 
 class GridMappingEnv(gym.Env):
@@ -19,9 +19,14 @@ class GridMappingEnv(gym.Env):
         self.ig_model = ig_model  # Modello per il miglior punto di vista successivo
         self.base_model = base_model  # Modello per la stima dello stato delle celle
         self.state = np.array(
-            [[{'pov': np.zeros(9, dtype=np.int32), 'best_next_pov': -1, 'id': None, 'marker_pred': 0,
-               'obs': np.zeros((9, 17), dtype=np.float32)}
-              for _ in range(self.grid_size)] for _ in range(self.grid_size)]
+            [[{'pov': np.zeros(9, dtype=np.int32),
+               'best_next_pov': -1,
+               'id': None,
+               'marker_pred': 0,
+               'obs': np.zeros((9, 17), dtype=np.float32),
+               'current_entropy': entropy(torch.full((8,), 1 / 8))} # entropia iniziale uniforme
+              for _ in range(self.grid_size)]
+             for _ in range(self.grid_size)]
         )
         self.agent_pos = [1, 1]  # Posizione iniziale dell'agente
         self.max_steps = max_steps
@@ -48,12 +53,15 @@ class GridMappingEnv(gym.Env):
         super().reset(seed=seed)
         # Usa np_random per creare il generatore di numeri casuali
         self.np_random, _ = gym.utils.seeding.np_random(seed)
-
-        # Resetta stato e agent position
         self.state = np.array(
-            [[{'pov': np.zeros(9, dtype=np.int32), 'best_next_pov': -1, 'id': None, 'marker_pred': 0,
-               'obs': np.zeros((9, 17), dtype=np.float32)}
-              for _ in range(self.grid_size)] for _ in range(self.grid_size)]
+            [[{'pov': np.zeros(9, dtype=np.int32),
+               'best_next_pov': -1,
+               'id': None,
+               'marker_pred': 0,
+               'obs': np.zeros((9, 17), dtype=np.float32),
+               'current_entropy': entropy(torch.full((8,), 1 / 8))}  # entropia iniziale uniforme
+              for _ in range(self.grid_size)]
+             for _ in range(self.grid_size)]
         )
         self.agent_pos = [1, 1]
         self._assign_ids_to_cells()
@@ -197,16 +205,17 @@ class GridMappingEnv(gym.Env):
         return input_array
 
     def _calculate_reward_ig(self, cell, input_array, update=True):
-        reward = 0
-
         # Calcola l'information gain solo se si osserva da un nuovo punto di vista
         base_model_pred = self.base_model(torch.tensor(input_array))
-        reward += information_gain(base_model_pred)
+        expected_entropy = entropy(base_model_pred)
+        # information gain
+        reward = cell['current_entropy'] - expected_entropy
 
         # Se il modello predice correttamente il marker, aggiorna lo stato della cella
         if torch.argmax(base_model_pred, 1) == cell["id"]['MARKER_COUNT']:
             if update:
                 cell['marker_pred'] = 1
+                cell['current_entropy'] = expected_entropy
 
         return reward
 
