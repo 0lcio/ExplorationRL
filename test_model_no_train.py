@@ -21,7 +21,7 @@ def test(render, strategy, initial_seed=42, num_runs=10):
     print("Test strategy: " + strategy)
     test_data = defaultdict(list)
     base_model, ig_model = load_models()
-    env = create_env(size=20, step=1000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
+    env = create_env(size=50, step=5000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
 
     # Lista per tenere traccia delle metriche per ogni run
     cumulative_rewards_per_run = []
