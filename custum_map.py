@@ -210,6 +210,9 @@ class GridMappingEnv(gym.Env):
         expected_entropy = entropy(base_model_pred)
         # information gain
         reward = cell['current_entropy'] - expected_entropy
+        reward = reward.item()
+        if reward < 0:
+            reward = 0
 
         # Se il modello predice correttamente il marker, aggiorna lo stato della cella
         if torch.argmax(base_model_pred, 1) == cell["id"]['MARKER_COUNT']:

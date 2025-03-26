@@ -48,10 +48,12 @@ def read_dict(file_path):
     return load_dictionary
 
 
-def entropy(predictions):
+def entropy(predictions, eps=1e-10):
     """Calcola l'entropia di un tensore di probabilità."""
     predictions = torch.softmax(predictions, dim=-1)
-    return -torch.sum(predictions * torch.log2(predictions))
+    # Evita valori esattamente 0
+    predictions = torch.clamp(predictions, min=eps)
+    return -torch.sum(predictions * torch.log2(predictions), dim=-1)
 
 
 def information_gain(prediction):
