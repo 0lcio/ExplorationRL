@@ -35,7 +35,7 @@ class GridMappingEnv(gym.Env):
 
         # Spazio d'azione e osservazione
         self.action_space = spaces.Discrete(4)
-        self.observation_space = spaces.Box(low=0, high=1, shape=(3, 3, 9, 17), dtype=np.float32)
+        self.observation_space = spaces.Box(low=0, high=1, shape=(3, 3, 9), dtype=np.float32)
 
         # Caricamento dataset
         self.dataset = pd.read_csv(dataset_path)
@@ -313,20 +313,23 @@ class GridMappingEnv(gym.Env):
             cell['marker_pred'] = 1
 
     def _get_observation(self):
-        obs = np.zeros((3, 3, 9, 17), dtype=np.float32)
+        obs = torch.zeros((3, 3, 9))
         ax, ay = self.agent_pos
 
-        # Scansiona un'area 3x3 intorno alla posizione dell'agente
         for i in range(-1, 2):  # Da -1 a 1 (inclusi)
             for j in range(-1, 2):  # Da -1 a 1 (inclusi)
                 nx, ny = ax + i, ay + j
-                # Controlla che le coordinate siano all'interno dei limiti della griglia
                 if 0 <= nx < self.grid_size and 0 <= ny < self.grid_size:
-                    # Prende l'osservazione dalla cella corrente
-                    obs[i + 1, j + 1] = self.state[nx, ny]['obs']
+                    cell_obs = self.state[nx, ny]['obs']
 
-        return obs
-
+                    # Filtra le righe che non contengono solo zeri
+                    filtered_obs = cell_obs[~np.all(cell_obs == 0, axis=1)]
+                    if filtered_obs.size > 0:
+                        marker_pre = self.base_model(torch.tensor(filtered_obs))
+                        e = entropy(marker_pre)
+                        obs[i + 1, j + 1] = torch.cat((marker_pre.detach(), e.unsqueeze(1).detach()), dim=1)
+        return obs.detach()
+    
     def render(self, mode='human'):
         if self.window is None:
             pygame.init()
