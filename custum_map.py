@@ -4,7 +4,7 @@ from gymnasium import spaces
 import numpy as np
 import pygame
 import pandas as pd
-
+import torch.nn.functional as F
 from helper import information_gain, entropy
 
 
@@ -214,11 +214,11 @@ class GridMappingEnv(gym.Env):
         if reward < 0:
             reward = 0
 
+        cell['current_entropy'] = expected_entropy
         # Se il modello predice correttamente il marker, aggiorna lo stato della cella
         if torch.argmax(base_model_pred, 1) == cell["id"]['MARKER_COUNT']:
             if update:
                 cell['marker_pred'] = 1
-                cell['current_entropy'] = expected_entropy
 
         return reward
 
@@ -321,13 +321,16 @@ class GridMappingEnv(gym.Env):
                 nx, ny = ax + i, ay + j
                 if 0 <= nx < self.grid_size and 0 <= ny < self.grid_size:
                     cell_obs = self.state[nx, ny]['obs']
+                    currunt_entropy = self.state[nx, ny]['current_entropy']
 
                     # Filtra le righe che non contengono solo zeri
                     filtered_obs = cell_obs[~np.all(cell_obs == 0, axis=1)]
                     if filtered_obs.size > 0:
                         marker_pre = self.base_model(torch.tensor(filtered_obs))
-                        e = entropy(marker_pre)
-                        obs[i + 1, j + 1] = torch.cat((marker_pre.detach(), e.unsqueeze(1).detach()), dim=1)
+                        marker_pre_softmax = F.softmax(marker_pre, dim=1)
+                        # e = entropy(marker_pre)
+                        obs[i + 1, j + 1] = torch.cat((marker_pre_softmax.detach(),
+                                                       currunt_entropy.unsqueeze(1).detach()), dim=1)
         return obs.detach()
     
     def render(self, mode='human'):
