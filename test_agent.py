@@ -6,6 +6,7 @@ from stable_baselines3 import DQN
 from callback import RewardLoggerCallback
 from custumCNN import CustomCNN
 from custum_map import GridMappingEnv
+from doubleCNN import DoubleCNNExtractor
 from helper import save_dict, load_models
 import tqdm as tqdm
 import numpy as np
@@ -42,18 +43,26 @@ def train(episodes, render, strategy, device, buffer_size=1_000_000):
     # output: action --> 4
     # model_dqn = DQN("MlpPolicy", env, verbose=1, buffer_size=800000)
 
+    # policy_kwargs = dict(
+    #     features_extractor_class=DoubleCNNExtractor,
+    #     features_extractor_kwargs=dict(
+    #         n_extra_cells=7,
+    #         pov_size=9
+    #     ),
+    # )
+
     policy_kwargs = dict(
         features_extractor_class=CustomCNN,
         features_extractor_kwargs=dict(features_dim=256),
     )
 
     model_dqn = DQN(
-        "CnnPolicy",
+        "MlpPolicy",
         env,
         policy_kwargs=policy_kwargs,
         verbose=1,
         buffer_size=buffer_size,
-        device=device
+        device=device,
     )
     model_dqn.learn(total_timesteps=episodes, callback=callback)
 

@@ -24,7 +24,7 @@ class GridMappingEnv(gym.Env):
                'id': None,
                'marker_pred': 0,
                'obs': np.zeros((9, 17), dtype=np.float32),
-               'current_entropy': entropy(torch.full((8,), 1 / 8))} # entropia iniziale uniforme
+               'current_entropy': entropy(torch.full((8,), 1 / 8))}  # entropia iniziale uniforme
               for _ in range(self.grid_size)]
              for _ in range(self.grid_size)]
         )
@@ -35,7 +35,8 @@ class GridMappingEnv(gym.Env):
 
         # Spazio d'azione e osservazione
         self.action_space = spaces.Discrete(4)
-        self.observation_space = spaces.Box(low=0, high=1, shape=(3, 3, 9), dtype=np.float32)
+        # self.observation_space = spaces.Box(low=0, high=1, shape=(255,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=0, high=1, shape=(3, 3, 18), dtype=np.float32)
 
         # Caricamento dataset
         self.dataset = pd.read_csv(dataset_path)
@@ -65,7 +66,7 @@ class GridMappingEnv(gym.Env):
         )
         self.agent_pos = [1, 1]
         self._assign_ids_to_cells()
-        if self.strategy == 'pred_ig_reward' or self.strategy == 'pred_no_train':
+        if self.strategy == 'pred_ig_reward' or self.strategy == 'pred_no_train' or self.strategy == 'pred_random_agent':
             self._update_pov_ig(self.agent_pos, self.agent_pos)
         else:
             self._update_pov_best_view(self.agent_pos)
@@ -112,7 +113,7 @@ class GridMappingEnv(gym.Env):
         self._move_agent(action)
 
         # Calcola il reward
-        if self.strategy == 'pred_ig_reward' or self.strategy == 'pred_no_train':
+        if self.strategy == 'pred_ig_reward' or self.strategy == 'pred_no_train' or self.strategy == 'pred_random_agent':
             reward = self._update_pov_ig(self.agent_pos, prev_pos)
         else:
             new_pov_observed, best_next_pov_visited = self._update_pov_best_view(self.agent_pos)
@@ -313,7 +314,7 @@ class GridMappingEnv(gym.Env):
             cell['marker_pred'] = 1
 
     def _get_observation(self):
-        obs = torch.zeros((3, 3, 9))
+        obs = torch.zeros((3, 3, 18))
         ax, ay = self.agent_pos
 
         for i in range(-1, 2):  # Da -1 a 1 (inclusi)
@@ -321,18 +322,62 @@ class GridMappingEnv(gym.Env):
                 nx, ny = ax + i, ay + j
                 if 0 <= nx < self.grid_size and 0 <= ny < self.grid_size:
                     cell_obs = self.state[nx, ny]['obs']
-                    currunt_entropy = self.state[nx, ny]['current_entropy']
+                    currunt_entropy = self.state[nx, ny]['current_entropy'].unsqueeze(0).detach()
+                    cell_povs = torch.tensor(self.state[nx, ny]['pov'], dtype=torch.float32).unsqueeze(0).detach()
 
                     # Filtra le righe che non contengono solo zeri
                     filtered_obs = cell_obs[~np.all(cell_obs == 0, axis=1)]
                     if filtered_obs.size > 0:
                         marker_pre = self.base_model(torch.tensor(filtered_obs))
-                        marker_pre_softmax = F.softmax(marker_pre, dim=1)
-                        # e = entropy(marker_pre)
-                        obs[i + 1, j + 1] = torch.cat((marker_pre_softmax.detach(),
-                                                       currunt_entropy.unsqueeze(1).detach()), dim=1)
+                        marker_pre_softmax = F.softmax(marker_pre, dim=1).detach()
+                        obs[i + 1, j + 1] = torch.cat((currunt_entropy, marker_pre_softmax, cell_povs), dim=1)
         return obs.detach()
-    
+
+    def _get_observation_double_cnn(self, extra_pov_radius=1):
+        obs_3x3 = torch.zeros((3, 3, 18))
+        pov_size = len(self.state[0, 0]['pov'])  # Dimensione del POV
+        ax, ay = self.agent_pos
+
+        pov_list = []  # Qui salviamo solo le celle di bordo
+
+        # Costruzione dell'osservazione principale (3x3)
+        for i in range(-1, 2):
+            for j in range(-1, 2):
+                nx, ny = ax + i, ay + j
+                if 0 <= nx < self.grid_size and 0 <= ny < self.grid_size:
+                    cell_obs = self.state[nx, ny]['obs']
+                    curr_entropy = self.state[nx, ny]['current_entropy'].unsqueeze(0).detach()
+                    cell_povs = torch.tensor(self.state[nx, ny]['pov'], dtype=torch.float32).unsqueeze(0).detach()
+
+                    filtered_obs = cell_obs[~np.all(cell_obs == 0, axis=1)]
+                    if filtered_obs.size > 0:
+                        marker_pre = self.base_model(torch.tensor(filtered_obs))
+                        marker_pre_softmax = F.softmax(marker_pre, dim=1).detach()
+                        obs_3x3[i + 1, j + 1] = torch.cat((curr_entropy, marker_pre_softmax, cell_povs), dim=1)
+
+        # Raccolta POV solo per le celle al bordo (escludendo 3x3 centrale)
+        for i in range(-extra_pov_radius, extra_pov_radius + 2):  # range più largo
+            for j in range(-extra_pov_radius, extra_pov_radius + 2):
+                if -1 <= i <= 1 and -1 <= j <= 1:
+                    continue  # Salta il 3x3 centrale
+                nx, ny = ax + i, ay + j
+                if 0 <= nx < self.grid_size and 0 <= ny < self.grid_size:
+                    cell_povs = torch.tensor(self.state[nx, ny]['pov'], dtype=torch.float32).detach()
+                    pov_list.append(cell_povs)
+
+        # Converti in tensore finale [N, pov_size]
+        if pov_list:
+            compact_pov_tensor = torch.stack(pov_list)
+        else:
+            compact_pov_tensor = torch.empty((0, pov_size))  # Nessuna cella valida
+
+        obs_3x3_flat = obs_3x3.view(-1)
+        extra_pov_flat = compact_pov_tensor.view(-1)
+
+        all_obs = torch.cat((obs_3x3_flat, extra_pov_flat), dim=0)
+
+        return all_obs.detach()
+
     def render(self, mode='human'):
         if self.window is None:
             pygame.init()
