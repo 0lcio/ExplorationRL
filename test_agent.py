@@ -6,7 +6,6 @@ from stable_baselines3 import DQN
 from callback import RewardLoggerCallback
 from custumCNN import CustomCNN
 from custum_map import GridMappingEnv
-from doubleCNN import DoubleCNNExtractor
 from helper import save_dict, load_models
 import tqdm as tqdm
 import numpy as np
