@@ -35,8 +35,8 @@ class GridMappingEnv(gym.Env):
 
         # Spazio d'azione e osservazione
         self.action_space = spaces.Discrete(4)
-        # self.observation_space = spaces.Box(low=0, high=1, shape=(255,), dtype=np.float32)
-        self.observation_space = spaces.Box(low=0, high=1, shape=(3, 3, 18), dtype=np.float32)
+        self.observation_space = spaces.Box(low=0, high=1, shape=(306,), dtype=np.float32)
+        # self.observation_space = spaces.Box(low=0, high=1, shape=(3, 3, 18), dtype=np.float32)
 
         # Caricamento dataset
         self.dataset = pd.read_csv(dataset_path)
@@ -75,7 +75,7 @@ class GridMappingEnv(gym.Env):
         if self.render_mode == 'human':
             self.render()
 
-        return self._get_observation(), {}
+        return self._get_observation_double_cnn(), {}
 
     def _assign_ids_to_cells(self):
         for i in range(1, self.n + 1):
@@ -128,7 +128,7 @@ class GridMappingEnv(gym.Env):
         if self.render_mode == 'human':
             self.render()
 
-        return self._get_observation(), reward, terminated, truncated, {}
+        return self._get_observation_double_cnn(), reward, terminated, truncated, {}
 
     def _move_agent(self, action):
         # Movimenti
@@ -355,9 +355,9 @@ class GridMappingEnv(gym.Env):
                         marker_pre_softmax = F.softmax(marker_pre, dim=1).detach()
                         obs_3x3[i + 1, j + 1] = torch.cat((curr_entropy, marker_pre_softmax, cell_povs), dim=1)
 
-        # Raccolta POV solo per le celle al bordo (escludendo 3x3 centrale)
-        for i in range(-extra_pov_radius, extra_pov_radius + 2):  # range più largo
-            for j in range(-extra_pov_radius, extra_pov_radius + 2):
+        # Raccolta POV per le celle al bordo (escludendo 3x3 centrale)
+        for i in range(-extra_pov_radius - 1, extra_pov_radius + 2):  # range più largo
+            for j in range(-extra_pov_radius - 1, extra_pov_radius + 2):
                 if -1 <= i <= 1 and -1 <= j <= 1:
                     continue  # Salta il 3x3 centrale
                 nx, ny = ax + i, ay + j
@@ -365,11 +365,12 @@ class GridMappingEnv(gym.Env):
                     cell_povs = torch.tensor(self.state[nx, ny]['pov'], dtype=torch.float32).detach()
                     pov_list.append(cell_povs)
 
-        # Converti in tensore finale [N, pov_size]
-        if pov_list:
-            compact_pov_tensor = torch.stack(pov_list)
-        else:
-            compact_pov_tensor = torch.empty((0, pov_size))  # Nessuna cella valida
+        # Pad con zeri fino a coprire tutte le celle del bordo
+        n_extra_max = (2 * extra_pov_radius + 3) ** 2 - 9  # Celle totali meno il 3x3 centrale
+        if len(pov_list) < n_extra_max:
+            for _ in range(n_extra_max - len(pov_list)):
+                pov_list.append(torch.zeros(pov_size))
+        compact_pov_tensor = torch.stack(pov_list[:n_extra_max])
 
         obs_3x3_flat = obs_3x3.view(-1)
         extra_pov_flat = compact_pov_tensor.view(-1)
