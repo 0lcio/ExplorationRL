@@ -35,7 +35,7 @@ class GridMappingEnv(gym.Env):
 
         # Spazio d'azione e osservazione
         self.action_space = spaces.Discrete(4)
-        self.observation_space = spaces.Box(low=0, high=1, shape=(306,), dtype=np.float32)
+        self._init_observation_space(extra_pov_radius=1)
         # self.observation_space = spaces.Box(low=0, high=1, shape=(3, 3, 18), dtype=np.float32)
 
         # Caricamento dataset
@@ -338,7 +338,9 @@ class GridMappingEnv(gym.Env):
         pov_size = len(self.state[0, 0]['pov'])  # Dimensione del POV
         ax, ay = self.agent_pos
 
-        pov_list = []  # Qui salviamo solo le celle di bordo
+        # Dimensione totale: n x n
+        grid_span = 2 * extra_pov_radius + 3
+        pov_grid = torch.zeros((grid_span, grid_span, pov_size))
 
         # Costruzione dell'osservazione principale (3x3)
         for i in range(-1, 2):
@@ -355,29 +357,38 @@ class GridMappingEnv(gym.Env):
                         marker_pre_softmax = F.softmax(marker_pre, dim=1).detach()
                         obs_3x3[i + 1, j + 1] = torch.cat((curr_entropy, marker_pre_softmax, cell_povs), dim=1)
 
-        # Raccolta POV per le celle al bordo (escludendo 3x3 centrale)
-        for i in range(-extra_pov_radius - 1, extra_pov_radius + 2):  # range più largo
+        # Costruzione POV grid [n, n, pov_size]
+        for i in range(-extra_pov_radius - 1, extra_pov_radius + 2):
             for j in range(-extra_pov_radius - 1, extra_pov_radius + 2):
-                if -1 <= i <= 1 and -1 <= j <= 1:
-                    continue  # Salta il 3x3 centrale
-                nx, ny = ax + i, ay + j
+                gx, gy = i + extra_pov_radius + 1, j + extra_pov_radius + 1  # Indici nella POV grid
+                nx, ny = ax + i, ay + j  # Coordinate nella mappa
+
                 if 0 <= nx < self.grid_size and 0 <= ny < self.grid_size:
                     cell_povs = torch.tensor(self.state[nx, ny]['pov'], dtype=torch.float32).detach()
-                    pov_list.append(cell_povs)
-
-        # Pad con zeri fino a coprire tutte le celle del bordo
-        n_extra_max = (2 * extra_pov_radius + 3) ** 2 - 9  # Celle totali meno il 3x3 centrale
-        if len(pov_list) < n_extra_max:
-            for _ in range(n_extra_max - len(pov_list)):
-                pov_list.append(torch.zeros(pov_size))
-        compact_pov_tensor = torch.stack(pov_list[:n_extra_max])
+                    pov_grid[gx, gy] = cell_povs
+                else:
+                    pov_grid[gx, gy] = torch.zeros(pov_size)  # Fuori dalla griglia → padding
 
         obs_3x3_flat = obs_3x3.view(-1)
-        extra_pov_flat = compact_pov_tensor.view(-1)
+        extra_pov_flat = pov_grid.view(-1)  # Flatten [n*n*9]
 
         all_obs = torch.cat((obs_3x3_flat, extra_pov_flat), dim=0)
 
         return all_obs.detach()
+
+    def _init_observation_space(self, extra_pov_radius=1):
+        n_center = 3 * 3 * 18  # Parte centrale fissa
+        n = 2 * extra_pov_radius + 3  # Dimensione lato della griglia POV
+        n_pov_cells = n * n  # Celle nella POV grid (incluso centro)
+        pov_size = len(self.state[0, 0]['pov'])  # Tipicamente 9
+
+        total_obs_len = n_center + n_pov_cells * pov_size
+        self.observation_space = spaces.Box(
+            low=0,
+            high=1,
+            shape=(total_obs_len,),
+            dtype=np.float32
+        )
 
     def render(self, mode='human'):
         if self.window is None:

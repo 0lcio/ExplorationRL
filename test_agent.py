@@ -45,7 +45,7 @@ def train(episodes, render, strategy, device, buffer_size=1_000_000):
 
     policy_kwargs = dict(
          features_extractor_class=DoubleCNNExtractor,
-         features_extractor_kwargs=dict(n_extra_cells=16),
+         features_extractor_kwargs=dict(extra_pov_radius=1),
     )
 
     # policy_kwargs = dict(
