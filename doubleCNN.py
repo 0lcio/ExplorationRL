@@ -1,7 +1,6 @@
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 class DoubleCNNExtractor(BaseFeaturesExtractor):
     def __init__(self, observation_space, extra_pov_radius=1):
@@ -26,9 +25,11 @@ class DoubleCNNExtractor(BaseFeaturesExtractor):
 
         # Ramo CNN per la POV completa [grid_size x grid_size]
         self.extra_cnn = nn.Sequential(
-            nn.Conv2d(self.pov_size, 32, kernel_size=3, padding=1),
+            nn.Conv2d(self.pov_size, 32, kernel_size=3),
             nn.ReLU(),
-            nn.Conv2d(32, 32, kernel_size=3, padding=1),
+            nn.Conv2d(32, 32, kernel_size=3),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3),
             nn.ReLU(),
             nn.Flatten()
         )
