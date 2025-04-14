@@ -35,7 +35,7 @@ class GridMappingEnv(gym.Env):
 
         # Spazio d'azione e osservazione
         self.action_space = spaces.Discrete(4)
-        self._init_observation_space(extra_pov_radius=3)
+        self._init_observation_space(extra_pov_radius=8)
         # self.observation_space = spaces.Box(low=0, high=1, shape=(3, 3, 18), dtype=np.float32)
 
         # Caricamento dataset
@@ -333,7 +333,7 @@ class GridMappingEnv(gym.Env):
                         obs[i + 1, j + 1] = torch.cat((currunt_entropy, marker_pre_softmax, cell_povs), dim=1)
         return obs.detach()
 
-    def _get_observation_double_cnn(self, extra_pov_radius=3):
+    def _get_observation_double_cnn(self, extra_pov_radius=8):
         obs_3x3 = torch.zeros((3, 3, 18))
         pov_size = len(self.state[0, 0]['pov'])  # Dimensione del POV
         ax, ay = self.agent_pos

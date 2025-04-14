@@ -29,7 +29,10 @@ class DoubleCNNExtractor(BaseFeaturesExtractor):
             nn.ReLU(),
             nn.Conv2d(32, 32, kernel_size=3),
             nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2),
             nn.Conv2d(32, 64, kernel_size=3),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3),
             nn.ReLU(),
             nn.Flatten()
         )
