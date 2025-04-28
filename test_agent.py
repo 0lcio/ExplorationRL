@@ -10,6 +10,7 @@ from doubleCNN import DoubleCNNExtractor
 from helper import save_dict, load_models
 import tqdm as tqdm
 import numpy as np
+import time
 
 
 def create_env(size, step, base_model, ig_model, strategy, render=False):
@@ -35,7 +36,7 @@ def train(episodes, render, strategy, device, buffer_size=1_000_000):
     train_data = defaultdict(list)
     callback = RewardLoggerCallback()
     base_model, ig_model = load_models()
-    env = create_env(size=20, step=1000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
+    env = create_env(size=50, step=3000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
 
     # MlpPolicy: rete completamente connessa (https://stable-baselines3.readthedocs.io/en/master/guide/custom_policy.html)
     # input: obs --> [3, 3, 9, 17] ---> flatten = 1377
@@ -45,7 +46,7 @@ def train(episodes, render, strategy, device, buffer_size=1_000_000):
 
     policy_kwargs = dict(
          features_extractor_class=DoubleCNNExtractor,
-         features_extractor_kwargs=dict(extra_pov_radius=8),
+         features_extractor_kwargs=dict(extra_pov_radius=1),
     )
 
     # policy_kwargs = dict(
@@ -61,12 +62,17 @@ def train(episodes, render, strategy, device, buffer_size=1_000_000):
         buffer_size=buffer_size,
         device=device,
     )
+    start_time = time.time()
     model_dqn.learn(total_timesteps=episodes, callback=callback)
+    end_time = time.time()
+
+    training_time = end_time - start_time
 
     train_data["episode_rewards"] = [float(r) for r in callback.episode_rewards]
     train_data["episode_cells_marker_pred_1"] = callback.episode_cells_marker_pred_1
     train_data["episode_cells_seen_pov"] = callback.episode_cells_seen_pov
     train_data["episode_steps"] = callback.episode_steps
+    train_data["training_time_seconds"] = training_time
 
     save_dict(train_data, f"./data/{dir_path}/train_data_{strategy}_{current_datetime}.json")
 
@@ -87,7 +93,7 @@ def test(render, strategy, initial_seed=42, num_runs=10):
 
     test_data = defaultdict(list)
     base_model, ig_model = load_models()
-    env = create_env(size=20, step=1000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
+    env = create_env(size=50, step=3000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
 
 
     # Lista per tenere traccia delle metriche per ogni run
