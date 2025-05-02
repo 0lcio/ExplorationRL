@@ -15,13 +15,16 @@ def plot_metrics(data, xlabel, ylabel, data_std=None, title=None, legend_labels=
         if data_std:
             std_dev = np.array(data_std[i]) if data_std else np.zeros_like(values)
         
-        if legend_labels and legend_labels[i] == "Random agent":
+        if legend_labels and legend_labels[i] == "Random Policy Agent":
             plt.plot(values, label=legend_labels[i], marker=marker, linestyle='--', color='red')
         else:
             plt.plot(values, label=legend_labels[i] if legend_labels else None, marker=marker)
         
-        if data_std:
+        if data_std and legend_labels[i] != "Random Policy Agent":
             plt.fill_between(range(len(values)), values - std_dev, values + std_dev, alpha=0.2)
+        if legend_labels and legend_labels[i] == "Random Policy Agent":
+            plt.fill_between(range(len(values)), values - std_dev, values + std_dev, alpha=0.1, color='red')
+
     plt.xlabel(xlabel)
     plt.ylabel(ylabel)
     if max_y is not None:
