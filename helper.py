@@ -9,7 +9,7 @@ from ig_model import NetIG
 
 
 def plot_metrics(data, xlabel, ylabel, data_std=None, title=None, legend_labels=None, save_path=None, marker="o", max_y=None):
-    plt.figure(figsize=(10, 6))
+    plt.figure(dpi=200)
     for i, values in enumerate(data):
         values = np.array(values)
         if data_std:
