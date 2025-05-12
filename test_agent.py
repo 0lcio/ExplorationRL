@@ -12,6 +12,9 @@ import tqdm as tqdm
 import numpy as np
 import time
 
+from mixed_exploration_policy import MixedExplorationPolicy
+from replay_buffer import prefill_replay_buffer
+
 
 def create_env(size, step, base_model, ig_model, strategy, render=False):
     env = GridMappingEnv(n=size, max_steps=step,
@@ -36,7 +39,7 @@ def train(episodes, render, strategy, device, buffer_size=1_000_000):
     train_data = defaultdict(list)
     callback = RewardLoggerCallback()
     base_model, ig_model = load_models()
-    env = create_env(size=50, step=3000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
+    env = create_env(size=20, step=1000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
 
     # MlpPolicy: rete completamente connessa (https://stable-baselines3.readthedocs.io/en/master/guide/custom_policy.html)
     # input: obs --> [3, 3, 9, 17] ---> flatten = 1377
@@ -46,7 +49,7 @@ def train(episodes, render, strategy, device, buffer_size=1_000_000):
 
     policy_kwargs = dict(
          features_extractor_class=DoubleCNNExtractor,
-         features_extractor_kwargs=dict(extra_pov_radius=1),
+         features_extractor_kwargs=dict(extra_pov_radius=8),
     )
 
     # policy_kwargs = dict(
@@ -54,15 +57,28 @@ def train(episodes, render, strategy, device, buffer_size=1_000_000):
     #    features_extractor_kwargs=dict(features_dim=256),
     # )
 
+    # model_dqn = DQN(
+    #    "MlpPolicy",
+    #    env,
+    #    policy_kwargs=policy_kwargs,
+    #    verbose=1,
+    #    buffer_size=buffer_size,
+    #    device=device,
+    # )
+
     model_dqn = DQN(
-        "MlpPolicy",
-        env,
-        policy_kwargs=policy_kwargs,
-        verbose=1,
+        policy=MixedExplorationPolicy,
+        env=env,
+        policy_kwargs={**policy_kwargs, 'env': env, 'p_ig_start': 1.0, 'p_ig_end': 0.0,
+                       'p_ig_decay_steps': 10000, 'strategy': 'entropy'},
         buffer_size=buffer_size,
         device=device,
+        verbose=1,
     )
     start_time = time.time()
+
+    # prefill_replay_buffer(model_dqn, env, ig_model, steps=1000)
+
     model_dqn.learn(total_timesteps=episodes, callback=callback)
     end_time = time.time()
 
@@ -93,7 +109,7 @@ def test(render, strategy, initial_seed=42, num_runs=10):
 
     test_data = defaultdict(list)
     base_model, ig_model = load_models()
-    env = create_env(size=50, step=3000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
+    env = create_env(size=20, step=1000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
 
 
     # Lista per tenere traccia delle metriche per ogni run
