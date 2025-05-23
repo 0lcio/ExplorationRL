@@ -167,7 +167,7 @@ class GridMappingEnv(gym.Env):
                     cell = self.state[nx, ny]
 
                     # Aggiorna lo stato della cella e ottieni l'input array
-                    input_array = self._update_cell(cell, i, j, update=update)
+                    input_array = self.update_cell(cell, i, j, update=update)
 
                     # Se abbiamo un nuovo input (cioè una nuova osservazione), calcola il reward
                     if isinstance(input_array, np.ndarray) and input_array.size > 0:
@@ -179,7 +179,7 @@ class GridMappingEnv(gym.Env):
 
         return total_reward
 
-    def _update_cell(self, cell, i, j, update):
+    def update_cell(self, cell, i, j, update):
         pov_index = (i + 1) * 3 + (j + 1)
 
         # Se il punto di vista è già stato osservato, non aggiornare

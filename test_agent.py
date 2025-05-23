@@ -207,7 +207,7 @@ use_cuda = torch.cuda.is_available()
 device = "cuda" if use_cuda else "cpu"
 
 # buffer_size = 100_000 if use_cuda else 50_000
-episodes = 50_000
+episodes = 50_000 if use_cuda else 25_000
 
 train(episodes=episodes, render=False, strategy=strategy, device=device)
 test(render=False, strategy=strategy, initial_seed=42, num_runs=20)

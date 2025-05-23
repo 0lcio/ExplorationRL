@@ -29,46 +29,54 @@ class MixedExplorationPolicy(DQNPolicy):
 
     def select_action_with_ig_model(self):
         agent_x, agent_y = self.env.agent_pos
-        grid_values = np.full((3, 3), -np.inf)
+        grid_min, grid_max = 1, self.env.n
+        best_score = -np.inf
+        best_action = None
+        for action in [0, 1, 2, 3]:
+            grid_values = []
+            new_x, new_y = self.get_new_position(action, agent_x, agent_y)
 
-        for dx in [-1, 0, 1]:
-            for dy in [-1, 0, 1]:
-                x, y = agent_x + dx, agent_y + dy
-                if 0 <= x < self.env.grid_size and 0 <= y < self.env.grid_size:
-                    obs_seq = self.env.state[x, y]["obs"]
-                    input_tensor = torch.tensor(obs_seq, dtype=torch.float32).unsqueeze(0).to(self.device)  # [1, 9, 17]
-                    with torch.no_grad():
-                        output = self.env.ig_model(input_tensor)  # [1, 9]
-                    entropy = output['pred_entropy']
-                    loss = output['pred_loss']
+            for dx in [-1, 0, 1]:
+                for dy in [-1, 0, 1]:
+                    x, y = new_x + dx, new_y + dy
+                    if grid_min <= x <= grid_max and grid_min <= y <= grid_max:
+                        cell = self.env.state[x, y]
+                        current_entropy = self.env.state[x, y]["current_entropy"]
+                        input_array = self.env.update_cell(cell, dx, dy, update=False)
+                        if isinstance(input_array, int) and input_array == 0:
+                            obs_seq = self.env.state[x, y]["obs"]
+                            input_array = torch.tensor(obs_seq, dtype=torch.float32).unsqueeze(0).to(self.device)
+                            non_zero_mask = (input_array != 0).any(dim=2)
+                            input_array = input_array[non_zero_mask]
 
-                    if self.strategy == 'entropy':
-                        grid_values[dy + 1, dx + 1] = entropy.mean().item()
-                    else:
-                        grid_values[dy + 1, dx + 1] = loss.mean().item()
+                        with torch.no_grad():
+                            output = self.env.ig_model(torch.tensor(input_array))  # [1, 9]
+                        entropy = output['pred_entropy']
 
-        best_dy, best_dx = np.unravel_index(np.argmin(grid_values), (3, 3))
-        dx = best_dx - 1
-        dy = best_dy - 1
-        action = self.direction_to_action(dx, dy)
+                        gain = current_entropy.item() - entropy.min().item()
+                        if gain < 0:
+                            gain = 0
 
-        return torch.tensor([action])
+                        if self.strategy == 'entropy':
+                            grid_values.append(gain)
 
-    def direction_to_action(self, dx, dy):
-        if dx == 0 and dy == -1:
-            return 0  # su
-        elif dx == 0 and dy == 1:
-            return 1  # giù
-        elif dx == -1 and dy == 0:
-            return 2  # sinistra
-        elif dx == 1 and dy == 0:
-            return 3  # destra
-        elif abs(dx) + abs(dy) == 2:  # movimento diagonale
-            # scegli una direzione valida che si avvicina
-            if np.random.rand() < 0.5:
-                return self.direction_to_action(dx, 0)  # passo orizzontale
-            else:
-                return self.direction_to_action(0, dy)  # passo verticale
-        else:
-            # fallback se dx, dy fuori range [-1, 1]
-            return np.random.choice([0, 1, 2, 3])
+            if grid_values:
+                score = np.sum(grid_values)
+                if score > best_score:
+                    best_score = score
+                    best_action = action
+
+        if best_action is None:
+            best_action = np.random.choice([0, 1, 2, 3])
+
+        return torch.tensor([best_action])
+
+    def get_new_position(self, action, x, y):
+        if action == 0:
+            return x, y - 1  # su
+        elif action == 1:
+            return x, y + 1  # giù
+        elif action == 2:
+            return x - 1, y  # sinistra
+        elif action == 3:
+            return x + 1, y  # destra
