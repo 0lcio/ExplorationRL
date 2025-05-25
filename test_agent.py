@@ -90,9 +90,9 @@ def train(episodes, render, strategy, device, buffer_size=1_000_000):
     train_data["episode_steps"] = callback.episode_steps
     train_data["training_time_seconds"] = training_time
 
-    save_dict(train_data, f"./data/{dir_path}/train_data_{strategy}_{current_datetime}.json")
+    save_dict(train_data, f"./data/{dir_path}/train_data_ig_reward_env_20x20_doubleCNN_expov8_ig_policy.json")
 
-    model_dqn.save(f"./data/{dir_path}/dqn_exploration_{strategy}_{current_datetime}")
+    model_dqn.save(f"./data/{dir_path}/dqn_exploration_ig_reward_env_20x20_doubleCNN_expov8_ig_policy")
     print("Stop train")
     del model_dqn
 
@@ -105,7 +105,7 @@ def test(render, strategy, initial_seed=42, num_runs=10):
             _, strategy = strategy.split("_")
         else:
             strategy = 'ig_reward'
-        model_dqn = DQN.load(f"./data/{dir_path}/dqn_exploration_{strategy}_{current_datetime}")
+        model_dqn = DQN.load(f"./data/{dir_path}/dqn_exploration_ig_reward_env_20x20_doubleCNN_expov8_ig_policy")
         model_dqn.policy.p_ig_start = 0
 
     test_data = defaultdict(list)
@@ -198,7 +198,7 @@ def test(render, strategy, initial_seed=42, num_runs=10):
     test_data["total_steps_per_run"] = total_steps_per_run
     test_data["total_position_per_run"] = total_position_per_run
 
-    save_dict(test_data, f"./data/{dir_path}/test_data_{strategy}_{current_datetime}.json")
+    save_dict(test_data, f"./data/{dir_path}/test_data_ig_reward_env_20x20_doubleCNN_expov8_ig_policy.json")
 
 
 current_datetime = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -208,7 +208,7 @@ use_cuda = torch.cuda.is_available()
 device = "cuda" if use_cuda else "cpu"
 
 # buffer_size = 100_000 if use_cuda else 50_000
-episodes = 50_000 if use_cuda else 25_000
+episodes = 50_000
 
 train(episodes=episodes, render=False, strategy=strategy, device=device)
 test(render=False, strategy=strategy, initial_seed=42, num_runs=20)
