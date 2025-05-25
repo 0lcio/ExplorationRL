@@ -106,6 +106,7 @@ def test(render, strategy, initial_seed=42, num_runs=10):
         else:
             strategy = 'ig_reward'
         model_dqn = DQN.load(f"./data/{dir_path}/dqn_exploration_{strategy}_{current_datetime}")
+        model_dqn.policy.p_ig_start = 0
 
     test_data = defaultdict(list)
     base_model, ig_model = load_models()

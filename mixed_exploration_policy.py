@@ -44,6 +44,7 @@ class MixedExplorationPolicy(DQNPolicy):
                         current_entropy = self.env.state[x, y]["current_entropy"]
                         input_array = self.env.update_cell(cell, dx, dy, update=False)
                         if isinstance(input_array, int) and input_array == 0:
+                            # cella già visitata del quel punto di vista
                             obs_seq = self.env.state[x, y]["obs"]
                             input_array = torch.tensor(obs_seq, dtype=torch.float32).unsqueeze(0).to(self.device)
                             non_zero_mask = (input_array != 0).any(dim=2)
@@ -73,10 +74,11 @@ class MixedExplorationPolicy(DQNPolicy):
 
     def get_new_position(self, action, x, y):
         if action == 0:
-            return x, y - 1  # su
+            return x - 1, y  # su
         elif action == 1:
-            return x, y + 1  # giù
+            return x, y + 1  # destra
         elif action == 2:
-            return x - 1, y  # sinistra
+            return x + 1, y  # giù
         elif action == 3:
-            return x + 1, y  # destra
+            return x, y - 1  # sinistra
+
