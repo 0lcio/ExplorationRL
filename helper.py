@@ -8,22 +8,30 @@ from constants import INPUT_SIZE, HIDDEN_SIZE, NUM_LAYERS, NUM_CLASSES_IG, NUM_C
 from ig_model import NetIG
 
 
-def plot_metrics(data, xlabel, ylabel, data_std=None, title=None, legend_labels=None, save_path=None, marker="o", max_y=None):
+def plot_metrics(data, xlabel, ylabel, data_std=None, title=None, legend_labels=None, save_path=None, marker="o", max_y=None, max_steps=None):
     plt.figure(dpi=200)
     for i, values in enumerate(data):
-        values = np.array(values)
+        values = np.array(values)[:max_steps]
         if data_std:
-            std_dev = np.array(data_std[i]) if data_std else np.zeros_like(values)
+            std_dev = np.array(data_std[i])[:max_steps] if data_std else np.zeros_like(values)
         
+        x_steps = np.arange(1, len(values) + 1) 
+
         if legend_labels and legend_labels[i] == "Random Policy Agent":
-            plt.plot(values, label=legend_labels[i], marker=marker, linestyle='--', color='red')
+            plt.plot(x_steps, values, label=legend_labels[i], marker=marker, linestyle='--', color='red')
+        elif legend_labels and legend_labels[i] == "IG agent(DoubleCnn 19x19 - IM policy)":
+            plt.plot(x_steps, values, label=legend_labels[i] if legend_labels else None, marker=marker, color='red')
+        elif legend_labels and legend_labels[i] == "IG agent(DoubleCnn 19x19 - ε-greedy)":
+            plt.plot(x_steps, values, label=legend_labels[i] if legend_labels else None, marker=marker, color='green')
+        elif legend_labels and legend_labels[i] == "IG agent(Belief+Entopy+POV - ε-greedy)":
+            plt.plot(x_steps, values, label=legend_labels[i] if legend_labels else None, marker=marker, color='orange')
         else:
-            plt.plot(values, label=legend_labels[i] if legend_labels else None, marker=marker)
+            plt.plot(x_steps, values, label=legend_labels[i] if legend_labels else None, marker=marker)
         
         if data_std and legend_labels[i] != "Random Policy Agent":
-            plt.fill_between(range(len(values)), values - std_dev, values + std_dev, alpha=0.2)
+            plt.fill_between(x_steps, values - std_dev, values + std_dev, alpha=0.2)
         if legend_labels and legend_labels[i] == "Random Policy Agent":
-            plt.fill_between(range(len(values)), values - std_dev, values + std_dev, alpha=0.1, color='red')
+            plt.fill_between(x_steps, values - std_dev, values + std_dev, alpha=0.1, color='red')
 
     plt.xlabel(xlabel)
     plt.ylabel(ylabel)
