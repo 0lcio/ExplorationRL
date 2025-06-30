@@ -14,6 +14,8 @@ import time
 
 from mixed_exploration_policy import MixedExplorationPolicy
 from replay_buffer import prefill_replay_buffer
+from stable_baselines3.common.callbacks import CheckpointCallback, CallbackList
+import os
 
 
 def create_env(size, step, base_model, ig_model, strategy, render=False):
@@ -37,7 +39,19 @@ def train(episodes, render, strategy, device, buffer_size=1_000_000):
         strategy = 'ig_reward'
 
     train_data = defaultdict(list)
-    callback = RewardLoggerCallback()
+
+    checkpoint_dir = f"./data/{dir_path}"
+    os.makedirs(checkpoint_dir, exist_ok=True)
+
+    # Callback per salvare il modello ogni 10.000 step (puoi cambiare il valore)
+    checkpoint_callback = CheckpointCallback(
+        save_freq=10_000,
+        save_path=checkpoint_dir,
+        name_prefix="dqn_exploration_ig_reward_env_20x20_doubleCNN_expov8_ig_policy_checkpoint"
+    )
+
+    # Unisci callback personalizzato e salvataggio
+    callback = CallbackList([RewardLoggerCallback(), checkpoint_callback])
     base_model, ig_model = load_models()
     env = create_env(size=20, step=1000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
 
@@ -90,9 +104,9 @@ def train(episodes, render, strategy, device, buffer_size=1_000_000):
     train_data["episode_steps"] = callback.episode_steps
     train_data["training_time_seconds"] = training_time
 
-    save_dict(train_data, f"./data/{dir_path}/train_data_ig_reward_env_20x20_doubleCNN_expov8_ig_policy.json")
+    save_dict(train_data, f"./data/{dir_path}/train_data_ig_reward_env_20x20_doubleCNN_expov8_ig_policy_{current_datetime}.json")
 
-    model_dqn.save(f"./data/{dir_path}/dqn_exploration_ig_reward_env_20x20_doubleCNN_expov8_ig_policy")
+    model_dqn.save(f"./data/{dir_path}/dqn_exploration_ig_reward_env_20x20_doubleCNN_expov8_ig_policy_{current_datetime}")
     print("Stop train")
     del model_dqn
 
@@ -211,4 +225,4 @@ device = "cuda" if use_cuda else "cpu"
 episodes = 50_000
 
 train(episodes=episodes, render=False, strategy=strategy, device=device)
-test(render=False, strategy=strategy, initial_seed=42, num_runs=20)
+# test(render=False, strategy=strategy, initial_seed=42, num_runs=20)
