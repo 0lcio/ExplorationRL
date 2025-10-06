@@ -11,6 +11,7 @@ from helper import save_dict, load_models
 import tqdm as tqdm
 import numpy as np
 import time
+import random
 
 from mixed_exploration_policy import MixedExplorationPolicy
 from replay_buffer import prefill_replay_buffer
@@ -25,6 +26,41 @@ def create_env(size, step, base_model, ig_model, strategy, render=False):
                          strategy=strategy,
                          render_mode='human' if render else None)
     return env
+
+def set_seed(seed, env=None):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    if env is not None:
+        env.reset(seed=seed)
+        env.action_space.seed(seed)
+        env.observation_space.seed(seed)
+
+def train_multiple_seeds(seeds, episodes, render, strategy, device, buffer_size=1_000_000):
+    results = {}
+    for seed in seeds:
+        print(f"\n=== Training with seed {seed} ===")
+        
+        # directory specifica per seed
+        dir_path = os.path.join(strategy, f"seed_{seed}")
+        
+        # set seed globale
+        set_seed(seed)
+        
+        # lancia train
+        train_data = train(
+            episodes=episodes,
+            render=render,
+            strategy=dir_path,  # passo una directory unica per seed
+            device=device,
+            buffer_size=buffer_size
+        )
+        
+        results[seed] = train_data
+    
+    return results
 
 
 def train(episodes, render, strategy, device, buffer_size=1_000_000):
@@ -53,7 +89,7 @@ def train(episodes, render, strategy, device, buffer_size=1_000_000):
     # Unisci callback personalizzato e salvataggio
     callback = CallbackList([RewardLoggerCallback(), checkpoint_callback])
     base_model, ig_model = load_models()
-    env = create_env(size=20, step=1000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
+    env = create_env(size=50, step=3000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
 
     # MlpPolicy: rete completamente connessa (https://stable-baselines3.readthedocs.io/en/master/guide/custom_policy.html)
     # input: obs --> [3, 3, 9, 17] ---> flatten = 1377
@@ -104,9 +140,9 @@ def train(episodes, render, strategy, device, buffer_size=1_000_000):
     train_data["episode_steps"] = callback.episode_steps
     train_data["training_time_seconds"] = training_time
 
-    save_dict(train_data, f"./data/{dir_path}/train_data_ig_reward_env_20x20_doubleCNN_expov8_ig_policy_{current_datetime}.json")
+    save_dict(train_data, f"./data/{dir_path}/train_data_ig_reward_env_50x50_doubleCNN_expov8_ig_policy_{current_datetime}.json")
 
-    model_dqn.save(f"./data/{dir_path}/dqn_exploration_ig_reward_env_20x20_doubleCNN_expov8_ig_policy_{current_datetime}")
+    model_dqn.save(f"./data/{dir_path}/dqn_exploration_ig_reward_env_50x50_doubleCNN_expov8_ig_policy_{current_datetime}")
     print("Stop train")
     del model_dqn
 
@@ -124,7 +160,7 @@ def test(render, strategy, initial_seed=42, num_runs=10):
 
     test_data = defaultdict(list)
     base_model, ig_model = load_models()
-    env = create_env(size=20, step=1000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
+    env = create_env(size=50, step=3000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
 
 
     # Lista per tenere traccia delle metriche per ogni run
@@ -223,6 +259,7 @@ device = "cuda" if use_cuda else "cpu"
 
 # buffer_size = 100_000 if use_cuda else 50_000
 episodes = 50_000
+seeds = [0, 42, 123, 999, 2024, 7, 88, 256, 512, 1024]
 
 train(episodes=episodes, render=False, strategy=strategy, device=device)
-# test(render=False, strategy=strategy, initial_seed=42, num_runs=20)
+test(render=False, strategy=strategy, initial_seed=42, num_runs=20)
