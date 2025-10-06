@@ -79,6 +79,7 @@ def train(episodes, render, strategy, device, buffer_size=1_000_000):
     checkpoint_dir = f"./data/{dir_path}"
     os.makedirs(checkpoint_dir, exist_ok=True)
 
+    reward_logger = RewardLoggerCallback()
     # Callback per salvare il modello ogni 10.000 step (puoi cambiare il valore)
     checkpoint_callback = CheckpointCallback(
         save_freq=10_000,
@@ -87,7 +88,7 @@ def train(episodes, render, strategy, device, buffer_size=1_000_000):
     )
 
     # Unisci callback personalizzato e salvataggio
-    callback = CallbackList([RewardLoggerCallback(), checkpoint_callback])
+    callback = CallbackList([reward_logger, checkpoint_callback])
     base_model, ig_model = load_models()
     env = create_env(size=50, step=3000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
 
@@ -134,10 +135,10 @@ def train(episodes, render, strategy, device, buffer_size=1_000_000):
 
     training_time = end_time - start_time
 
-    train_data["episode_rewards"] = [float(r) for r in callback.episode_rewards]
-    train_data["episode_cells_marker_pred_1"] = callback.episode_cells_marker_pred_1
-    train_data["episode_cells_seen_pov"] = callback.episode_cells_seen_pov
-    train_data["episode_steps"] = callback.episode_steps
+    train_data["episode_rewards"] = [float(r) for r in reward_logger.episode_rewards]
+    train_data["episode_cells_marker_pred_1"] = reward_logger.episode_cells_marker_pred_1
+    train_data["episode_cells_seen_pov"] = reward_logger.episode_cells_seen_pov
+    train_data["episode_steps"] = reward_logger.episode_steps
     train_data["training_time_seconds"] = training_time
 
     save_dict(train_data, f"./data/{dir_path}/train_data_ig_reward_env_50x50_doubleCNN_expov8_ig_policy_{current_datetime}.json")
