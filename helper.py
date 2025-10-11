@@ -82,10 +82,10 @@ def load_models():
     base_model_path = os.path.join('data', 'fold_1_saved_base_model.pth')
     ig_model_path = os.path.join('data', 'fold_1_saved_ig_model_global_MSE_entropy_loss_head.pth')
     if torch.cuda.is_available():
-        base_model.load_state_dict(torch.load(base_model_path))
-        ig_model.load_state_dict(torch.load(ig_model_path))
+        base_model.load_state_dict(torch.load(base_model_path, map_location=torch.device('cuda'), weights_only=True))
+        ig_model.load_state_dict(torch.load(ig_model_path, map_location=torch.device('cuda'), weights_only=True))
     else:
         base_model.load_state_dict(torch.load(base_model_path, map_location=torch.device('cpu'), weights_only=True))
-        base_model.load_state_dict(torch.load(base_model_path, map_location=torch.device('cpu'), weights_only=True))
+        ig_model.load_state_dict(torch.load(ig_model_path, map_location=torch.device('cpu'), weights_only=True))
 
     return base_model, ig_model
