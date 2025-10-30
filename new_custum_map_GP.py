@@ -1,12 +1,12 @@
 # custum_map_patched.py
-# Versione patchata del tuo GridMappingEnv:
-# - ObserverLSTM stateful per cella (streaming)
-# - conversione logits -> gaussian message (mu,var -> natural params h,J)
-# - ObserverStateStore per hidden states per cella
-# - Global fusion (Lambda, eta) con Laplacian prior (dense, per ora)
-# - Integrazione in update_cell e _update_cell_state
+# Patched version of GridMappingEnv:
+# - ObserverLSTM stateful per cell (streaming)
+# - logits -> Gaussian message conversion (mu,var -> natural params h,J)
+# - ObserverStateStore for per-cell hidden states
+# - Global fusion (Lambda, eta) with Laplacian prior (dense, for now)
+# - Integration into update_cell and _update_cell_state
 
-import math
+import math 
 import random
 import numpy as np
 import pandas as pd
