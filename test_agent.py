@@ -6,7 +6,7 @@ from stable_baselines3 import DQN
 from callback import RewardLoggerCallback
 from custumCNN import CustomCNN
 # from custum_map import GridMappingEnv
-from new_custum_map_simple_GP import GridMappingEnv
+from new_custum_map_GP import GridMappingEnv
 from doubleCNN import DoubleCNNExtractor
 from helper import save_dict, load_models
 import tqdm as tqdm
@@ -264,5 +264,6 @@ device = "cuda" if use_cuda else "cpu"
 episodes = 50_000
 seeds = [0, 42, 123, 999, 2024, 7, 88, 256, 512, 1024]
 
+# TODO: make env a parameter
 train(episodes=episodes, render=False, strategy=strategy, device=device)
 test(render=False, strategy=strategy, initial_seed=42, num_runs=20)

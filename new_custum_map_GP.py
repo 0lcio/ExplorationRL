@@ -438,22 +438,47 @@ class GridMappingEnv(gym.Env):
 
     def update_cell(self, cell, i, j, update):
         pov_index = (i + 1) * 3 + (j + 1)
+
+        # Se il punto di vista è già stato osservato, non aggiornare
         if cell['pov'][pov_index] == 1:
-            return np.array([])
+            return 0  # Nessun reward aggiunto se già osservato
 
         cell_povs = cell['pov'].copy()
         cell_povs[pov_index] = 1
+        # Aggiorna lo stato di osservazione
         if update:
             cell['pov'][pov_index] = 1
 
+        # Ottieni gli indici dei punti di vista osservati
         observed_indices = np.flatnonzero(cell_povs)
+
+        # Crea l'input array per il modello in base ai punti di vista osservati
         input_array = self._get_cell_input_array(cell, observed_indices)
 
+        # Aggiorna la matrice 'obs' della cella
         if update:
             m = input_array.shape[0]
             cell['obs'][:m, :] = input_array
 
         return input_array
+
+    def _get_cell_input_array(self, cell, observed_indices):
+        input_list = []
+        filtered_data = self.dataset[
+            (self.dataset["IMAGE_ID"] == cell["id"]['IMAGE_ID']) &
+            (self.dataset["BOX_COUNT"] == cell["id"]['BOX_COUNT']) &
+            (self.dataset["MARKER_COUNT"] == cell["id"]['MARKER_COUNT'])
+            ]
+
+        for pov in observed_indices:
+            row = filtered_data[filtered_data["POV_ID"] == pov + 1]
+            if not row.empty:
+                dist_prob = np.array([row[f"P{i}"] for i in range(8)]).flatten()
+                pov_id_hot = np.zeros(9)
+                pov_id_hot[pov] = 1
+                input_list.append(np.concatenate((pov_id_hot, dist_prob)))
+
+        return np.array(input_list, dtype=np.float32)
 
     def _calculate_reward_ig(self, cell, input_array, update=True):
         # For each newly observed view (row) perform an observer step (streaming) and fuse
@@ -670,7 +695,10 @@ class GridMappingEnv(gym.Env):
                                 q = marker_pre_softmax
                             except Exception:
                                 q = torch.ones(self.N_CLASSES) / float(self.N_CLASSES)
-                        obs_3x3[i + 1, j + 1] = torch.cat((curr_entropy, q, cell_povs), dim=1).squeeze(0)
+
+                        curr_entropy_2d = curr_entropy.unsqueeze(0)  # Da (1,) a (1, 1)
+                        q_2d = q.unsqueeze(0)
+                        obs_3x3[i + 1, j + 1] = torch.cat((curr_entropy_2d, q_2d, cell_povs), dim=1).squeeze(0)
 
         # pov grid large neighborhood of pov occupancy (binary)
         for i in range(-extra_pov_radius - 1, extra_pov_radius + 2):
