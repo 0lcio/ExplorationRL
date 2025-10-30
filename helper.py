@@ -75,7 +75,7 @@ def information_gain(prediction):
     return ig
 
 
-def load_models():
+def load_models(device):
     base_model = netCounterBase(NUM_CLASSES_BASE, INPUT_SIZE, HIDDEN_SIZE, NUM_LAYERS)
     ig_model = NetIG(NUM_CLASSES_IG, INPUT_SIZE, HIDDEN_SIZE, NUM_LAYERS)
 
@@ -87,5 +87,12 @@ def load_models():
     else:
         base_model.load_state_dict(torch.load(base_model_path, map_location=torch.device('cpu'), weights_only=True))
         ig_model.load_state_dict(torch.load(ig_model_path, map_location=torch.device('cpu'), weights_only=True))
+
+    base_model.to(device)
+    ig_model.to(device)
+
+    # Imposta i modelli in modalità valutazione
+    base_model.eval()
+    ig_model.eval()
 
     return base_model, ig_model

@@ -12,12 +12,13 @@ class GridMappingEnv(gym.Env):
     metadata = {'render.modes': ['human']}
 
     def __init__(self, n=5, max_steps=300, render_mode=None, ig_model=None, base_model=None,
-                 dataset_path='./data/final_output.csv', strategy=None):
+                 dataset_path='./data/final_output.csv', strategy=None, device='cpu'):
         super(GridMappingEnv, self).__init__()
         self.n = n  # Dimensione della griglia originale
         self.grid_size = n + 2  # Dimensione della griglia con bordo
         self.ig_model = ig_model  # Modello per il miglior punto di vista successivo
         self.base_model = base_model  # Modello per la stima dello stato delle celle
+        self.device = device
         self.state = np.array(
             [[{'pov': np.zeros(9, dtype=np.int32),
                'best_next_pov': -1,
@@ -207,7 +208,7 @@ class GridMappingEnv(gym.Env):
 
     def _calculate_reward_ig(self, cell, input_array, update=True):
         # Calcola l'information gain solo se si osserva da un nuovo punto di vista
-        base_model_pred = self.base_model(torch.tensor(input_array))
+        base_model_pred = self.base_model(torch.tensor(input_array).to(self.device))
         expected_entropy = entropy(base_model_pred)
         # information gain
         reward = cell['current_entropy'] - expected_entropy
@@ -314,7 +315,7 @@ class GridMappingEnv(gym.Env):
             cell['marker_pred'] = 1
 
     def _get_observation(self):
-        obs = torch.zeros((3, 3, 18))
+        obs = torch.zeros((3, 3, 18)).to(self.device)
         ax, ay = self.agent_pos
 
         for i in range(-1, 2):  # Da -1 a 1 (inclusi)
@@ -324,6 +325,9 @@ class GridMappingEnv(gym.Env):
                     cell_obs = self.state[nx, ny]['obs']
                     currunt_entropy = self.state[nx, ny]['current_entropy'].unsqueeze(0).detach()
                     cell_povs = torch.tensor(self.state[nx, ny]['pov'], dtype=torch.float32).unsqueeze(0).detach()
+
+                    currunt_entropy = currunt_entropy.to(self.device)
+                    cell_povs = cell_povs.to(self.device)
 
                     # Filtra le righe che non contengono solo zeri
                     filtered_obs = cell_obs[~np.all(cell_obs == 0, axis=1)]
@@ -351,9 +355,12 @@ class GridMappingEnv(gym.Env):
                     curr_entropy = self.state[nx, ny]['current_entropy'].unsqueeze(0).detach()
                     cell_povs = torch.tensor(self.state[nx, ny]['pov'], dtype=torch.float32).unsqueeze(0).detach()
 
+                    curr_entropy = curr_entropy.to(self.device)
+                    cell_povs = cell_povs.to(self.device)
+
                     filtered_obs = cell_obs[~np.all(cell_obs == 0, axis=1)]
                     if filtered_obs.size > 0:
-                        marker_pre = self.base_model(torch.tensor(filtered_obs))
+                        marker_pre = self.base_model(torch.tensor(filtered_obs).to(self.device))
                         marker_pre_softmax = F.softmax(marker_pre, dim=1).detach()
                         obs_3x3[i + 1, j + 1] = torch.cat((curr_entropy, marker_pre_softmax, cell_povs), dim=1)
 

@@ -1,12 +1,12 @@
-import gym
-from gym import spaces
+import gymnasium as gym
+from gymnasium import spaces
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
 from torch.distributions import Categorical
 from scipy.ndimage import gaussian_filter
-from scipy.stats import entropy
+from helper import information_gain, entropy
 import matplotlib.pyplot as plt
 import pygame
 
@@ -41,12 +41,13 @@ class GridMappingEnv(gym.Env):
 
     def __init__(self, n=5, max_steps=300, render_mode=None,
                  ig_model=None, base_model=None,
-                 dataset_path='./data/final_output.csv', strategy=None):
+                 dataset_path='./data/final_output.csv', strategy=None, device='cpu'):
         super(GridMappingEnv, self).__init__()
         self.n = n
         self.grid_size = n + 2  # include bordo
         self.ig_model = ig_model
         self.base_model = base_model
+        self.device = device
         self.strategy = f"pred_{strategy}"
 
         self.state = np.array([
@@ -66,6 +67,7 @@ class GridMappingEnv(gym.Env):
         self.render_mode = render_mode
 
         self.dataset = pd.read_csv(dataset_path)
+        self.action_space = spaces.Discrete(4)
         self._init_observation_space(extra_pov_radius=8)
 
         # Parametri per il campo latente
@@ -77,6 +79,33 @@ class GridMappingEnv(gym.Env):
         self.cell_size = self.window_size // self.grid_size
         self.window = None
         self.clock = None
+
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
+        # Usa np_random per creare il generatore di numeri casuali
+        self.np_random, _ = gym.utils.seeding.np_random(seed)
+        self.state = np.array(
+            [[{'pov': np.zeros(9, dtype=np.int32),
+               'best_next_pov': -1,
+               'id': None,
+               'marker_pred': 0,
+               'obs': np.zeros((9, 17), dtype=np.float32),
+               'current_entropy': entropy(torch.full((8,), 1 / 8))}  # entropia iniziale uniforme
+              for _ in range(self.grid_size)]
+             for _ in range(self.grid_size)]
+        )
+        self.agent_pos = [1, 1]
+        self._assign_ids_to_cells()
+        if self.strategy == 'pred_ig_reward' or self.strategy == 'pred_no_train' or self.strategy == 'pred_random_agent':
+            self._update_pov_ig(self.agent_pos, self.agent_pos)
+        else:
+            self._update_pov_best_view(self.agent_pos)
+        self.current_steps = 0
+
+        if self.render_mode == 'human':
+            self.render()
+
+        return self._get_observation_double_cnn(), {}
 
     # ------------------------------------------------------------
     # Generazione del campo latente
@@ -129,32 +158,33 @@ class GridMappingEnv(gym.Env):
                 new_entropy = old_entropy * (1 - 0.3 * weight) + observed_entropy * (0.3 * weight)
                 self.state[i, j]['current_entropy'] = new_entropy
 
-    # ------------------------------------------------------------
-    # Funzioni standard Gym
-    # ------------------------------------------------------------
-    def reset(self, seed=None, options=None):
-        super().reset(seed=seed)
-        self.state = np.array([
-            [{'pov': np.zeros(9, dtype=np.int32),
-              'best_next_pov': -1,
-              'id': None,
-              'marker_pred': 0,
-              'obs': np.zeros((9, 17), dtype=np.float32),
-              'current_entropy': entropy(torch.full((8,), 1 / 8))}
-             for _ in range(self.grid_size)]
-            for _ in range(self.grid_size)
-        ])
+    def step(self, action):
+        self.current_steps += 1
+        prev_pos = list(self.agent_pos)
 
-        self.agent_pos = [1, 1]
-        self._assign_ids_to_cells()
-        self.current_steps = 0
+        # Esegui l'azione
+        self._move_agent(action)
+
+        # Calcola il reward
+        if self.strategy == 'pred_ig_reward' or self.strategy == 'pred_no_train' or self.strategy == 'pred_random_agent':
+            reward = self._update_pov_ig(self.agent_pos, prev_pos)
+        else:
+            new_pov_observed, best_next_pov_visited = self._update_pov_best_view(self.agent_pos)
+            reward = self._calculate_reward_best_view(new_pov_observed, best_next_pov_visited, prev_pos)
+
+        # Verifica condizioni di terminazione
+        terminated = self._check_termination()
+        truncated = self.current_steps >= self.max_steps
+        if terminated:
+            reward += 30
 
         if self.render_mode == 'human':
             self.render()
 
-        return self._get_observation(), {}
+        return self._get_observation_double_cnn(), reward, terminated, truncated, {}
 
     def _move_agent(self, action):
+        # Movimenti
         if action == 0:  # su
             self.agent_pos[0] = max(self.agent_pos[0] - 1, 0)
         elif action == 1:  # destra
@@ -164,38 +194,211 @@ class GridMappingEnv(gym.Env):
         elif action == 3:  # sinistra
             self.agent_pos[1] = max(self.agent_pos[1] - 1, 0)
 
-    def step(self, action):
-        self.current_steps += 1
-        prev_pos = list(self.agent_pos)
-        self._move_agent(action)
+    def _check_termination(self):
+        all_cells_correct, all_wrong_cells_visited_9_pov = True, True
 
-        ax, ay = self.agent_pos
-        cell_info = self.state[ax, ay]['id']
-        true_marker = cell_info['MARKER_COUNT']
+        for row in self.state[1:self.n + 1, 1:self.n + 1]:
+            for cell in row:
+                if cell['marker_pred'] == 0:
+                    all_cells_correct = False
+                    if sum(cell['pov']) != 9:
+                        all_wrong_cells_visited_9_pov = False
+                        break
 
-        # Stima del modello base
-        pred = torch.ones(8) / 8 if self.base_model is None else self.base_model(torch.randn(1, 17))
-        ent = entropy(pred)
+        return all_cells_correct or all_wrong_cells_visited_9_pov
 
-        # Aggiornamento credenze dei vicini
-        self._update_neighbor_beliefs(ax, ay, ent)
+    def _update_pov_ig(self, agent_pos, prev_pos, update=True):
+        ax, ay = agent_pos
+        grid_min, grid_max = 1, self.n
+        total_reward = 0
 
-        reward = -ent  # reward = minore entropia → migliore osservazione
-        terminated = self.current_steps >= self.max_steps
-        truncated = False
+        # Cicla su tutte le celle intorno all'agente (3x3)
+        for i in range(-1, 2):
+            for j in range(-1, 2):
+                nx, ny = ax + i, ay + j
+                if grid_min <= nx <= grid_max and grid_min <= ny <= grid_max:
+                    cell = self.state[nx, ny]
 
-        if self.render_mode == 'human':
-            self.render()
+                    # Aggiorna lo stato della cella e ottieni l'input array
+                    input_array = self.update_cell(cell, i, j, update=update)
 
-        return self._get_observation(), reward, terminated, truncated, {}
+                    # Se abbiamo un nuovo input (cioè una nuova osservazione), calcola il reward
+                    if isinstance(input_array, np.ndarray) and input_array.size > 0:
+                        total_reward += self._calculate_reward_ig(cell, input_array, update)
 
-    # ------------------------------------------------------------
-    # Osservazione e spazio
-    # ------------------------------------------------------------
+        # Penalità per restare nella stessa posizione
+        if self.agent_pos == prev_pos:
+            total_reward -= 2
+
+        return total_reward
+
+    def update_cell(self, cell, i, j, update):
+        pov_index = (i + 1) * 3 + (j + 1)
+
+        # Se il punto di vista è già stato osservato, non aggiornare
+        if cell['pov'][pov_index] == 1:
+            return 0  # Nessun reward aggiunto se già osservato
+
+        cell_povs = cell['pov'].copy()
+        cell_povs[pov_index] = 1
+        # Aggiorna lo stato di osservazione
+        if update:
+            cell['pov'][pov_index] = 1
+
+        # Ottieni gli indici dei punti di vista osservati
+        observed_indices = np.flatnonzero(cell_povs)
+
+        # Crea l'input array per il modello in base ai punti di vista osservati
+        input_array = self._get_cell_input_array(cell, observed_indices)
+
+        # Aggiorna la matrice 'obs' della cella
+        if update:
+            m = input_array.shape[0]
+            cell['obs'][:m, :] = input_array
+
+        return input_array
+
+    def _calculate_reward_ig(self, cell, input_array, update=True):
+        # Calcola l'information gain solo se si osserva da un nuovo punto di vista
+        base_model_pred = self.base_model(torch.tensor(input_array).to(self.device))
+        expected_entropy = entropy(base_model_pred)
+        # information gain
+        reward = cell['current_entropy'] - expected_entropy
+        reward = reward.item()
+        if reward < 0:
+            reward = 0
+
+        cell['current_entropy'] = expected_entropy
+        # Se il modello predice correttamente il marker, aggiorna lo stato della cella
+        if torch.argmax(base_model_pred, 1) == cell["id"]['MARKER_COUNT']:
+            if update:
+                cell['marker_pred'] = 1
+
+        return reward
+
+    def _get_cell_input_array(self, cell, observed_indices):
+        input_list = []
+        filtered_data = self.dataset[
+            (self.dataset["IMAGE_ID"] == cell["id"]['IMAGE_ID']) &
+            (self.dataset["BOX_COUNT"] == cell["id"]['BOX_COUNT']) &
+            (self.dataset["MARKER_COUNT"] == cell["id"]['MARKER_COUNT'])
+            ]
+
+        for pov in observed_indices:
+            row = filtered_data[filtered_data["POV_ID"] == pov + 1]
+            if not row.empty:
+                dist_prob = np.array([row[f"P{i}"] for i in range(8)]).flatten()
+                pov_id_hot = np.zeros(9)
+                pov_id_hot[pov] = 1
+                input_list.append(np.concatenate((pov_id_hot, dist_prob)))
+
+        return np.array(input_list, dtype=np.float32)
+
+    def _calculate_reward_best_view(self, new_pov_observed, best_next_pov_visited, prev_pos):
+        reward = new_pov_observed * 1 + best_next_pov_visited * 8.0
+        if self.agent_pos == prev_pos:
+            reward -= 2
+        return reward
+
+    def _update_pov_best_view(self, agent_pos):
+        ax, ay = agent_pos
+        new_pov_count = 0
+        best_next_pov_visited = 0
+        grid_min, grid_max = 1, self.n
+
+        for i in range(-1, 2):
+            for j in range(-1, 2):
+                nx, ny = ax + i, ay + j
+                if grid_min <= nx <= grid_max and grid_min <= ny <= grid_max:
+                    cell = self.state[nx, ny]
+                    pov_index = (i + 1) * 3 + (j + 1)
+
+                    if cell['pov'][pov_index] == 0:
+                        cell['pov'][pov_index] = 1
+                        # se osserva una cella con stima sbagliata da una nuova posizione
+                        if cell['marker_pred'] == 0:
+                            new_pov_count += 1
+
+                        if cell['best_next_pov'] == pov_index:
+                            best_next_pov_visited += 1
+
+                    # Aggiornamento dello stato della cella
+                    self._update_cell_state(cell)
+
+        return new_pov_count, best_next_pov_visited
+
+    def _update_cell_state(self, cell):
+        observed_indices = np.flatnonzero(cell['pov'])
+
+        input_list = []
+        filtered_data = self.dataset[
+            (self.dataset["IMAGE_ID"] == cell["id"]['IMAGE_ID']) &
+            (self.dataset["BOX_COUNT"] == cell["id"]['BOX_COUNT']) &
+            (self.dataset["MARKER_COUNT"] == cell["id"]['MARKER_COUNT'])
+            ]
+
+        for pov in observed_indices:
+            row = filtered_data[filtered_data["POV_ID"] == pov + 1]
+            if not row.empty:
+                dist_prob = np.array([row[f"P{i}"] for i in range(8)]).flatten()
+                pov_id_hot = np.zeros(9)
+                pov_id_hot[pov] = 1
+                input_list.append(np.concatenate((pov_id_hot, dist_prob)))
+
+        input_array = np.array(input_list, dtype=np.float32)
+        input_tensor = torch.tensor(input_array)
+
+        m = input_array.shape[0]
+        cell['obs'][:m, :] = input_array
+
+        if len(observed_indices) != 9:
+            if self.strategy == 'pred_random' or self.strategy == "pred_random_agent":
+                next_best_pov = torch.randint(0, 9, (1,)).item()
+            else:
+                ig_prediction = self.ig_model(input_tensor)[self.strategy]
+                next_best_pov = int(torch.argmin(ig_prediction).item())
+
+            cell['best_next_pov'] = next_best_pov
+        else:
+            cell['best_next_pov'] = -1
+
+        base_model_pred = self.base_model(input_tensor)
+        if torch.argmax(base_model_pred, 1) == cell["id"]['MARKER_COUNT']:
+            cell['marker_pred'] = 1
+
     def _get_observation(self):
-        obs = torch.zeros((3, 3, 18))
+        obs = torch.zeros((3, 3, 18)).to(self.device)
         ax, ay = self.agent_pos
 
+        for i in range(-1, 2):  # Da -1 a 1 (inclusi)
+            for j in range(-1, 2):  # Da -1 a 1 (inclusi)
+                nx, ny = ax + i, ay + j
+                if 0 <= nx < self.grid_size and 0 <= ny < self.grid_size:
+                    cell_obs = self.state[nx, ny]['obs']
+                    currunt_entropy = self.state[nx, ny]['current_entropy'].unsqueeze(0).detach()
+                    cell_povs = torch.tensor(self.state[nx, ny]['pov'], dtype=torch.float32).unsqueeze(0).detach()
+
+                    currunt_entropy = currunt_entropy.to(self.device)
+                    cell_povs = cell_povs.to(self.device)
+
+                    # Filtra le righe che non contengono solo zeri
+                    filtered_obs = cell_obs[~np.all(cell_obs == 0, axis=1)]
+                    if filtered_obs.size > 0:
+                        marker_pre = self.base_model(torch.tensor(filtered_obs).to(self.device))
+                        marker_pre_softmax = F.softmax(marker_pre, dim=1).detach()
+                        obs[i + 1, j + 1] = torch.cat((currunt_entropy, marker_pre_softmax, cell_povs), dim=1)
+        return obs.detach()
+
+    def _get_observation_double_cnn(self, extra_pov_radius=8):
+        obs_3x3 = torch.zeros((3, 3, 18))
+        pov_size = len(self.state[0, 0]['pov'])  # Dimensione del POV
+        ax, ay = self.agent_pos
+
+        # Dimensione totale: n x n
+        grid_span = 2 * extra_pov_radius + 3
+        pov_grid = torch.zeros((grid_span, grid_span, pov_size))
+
+        # Costruzione dell'osservazione principale (3x3)
         for i in range(-1, 2):
             for j in range(-1, 2):
                 nx, ny = ax + i, ay + j
@@ -203,17 +406,48 @@ class GridMappingEnv(gym.Env):
                     cell_obs = self.state[nx, ny]['obs']
                     curr_entropy = self.state[nx, ny]['current_entropy'].unsqueeze(0).detach()
                     cell_povs = torch.tensor(self.state[nx, ny]['pov'], dtype=torch.float32).unsqueeze(0).detach()
-                    obs[i + 1, j + 1] = torch.cat((curr_entropy, torch.zeros(1, 8), cell_povs), dim=1)
 
-        return obs.detach()
+                    curr_entropy = curr_entropy.to(self.device)
+                    cell_povs = cell_povs.to(self.device)
+
+                    filtered_obs = cell_obs[~np.all(cell_obs == 0, axis=1)]
+                    if filtered_obs.size > 0:
+                        marker_pre = self.base_model(torch.tensor(filtered_obs).to(self.device))
+                        marker_pre_softmax = F.softmax(marker_pre, dim=1).detach()
+                        obs_3x3[i + 1, j + 1] = torch.cat((curr_entropy, marker_pre_softmax, cell_povs), dim=1)
+
+        # Costruzione POV grid [n, n, pov_size]
+        for i in range(-extra_pov_radius - 1, extra_pov_radius + 2):
+            for j in range(-extra_pov_radius - 1, extra_pov_radius + 2):
+                gx, gy = i + extra_pov_radius + 1, j + extra_pov_radius + 1  # Indici nella POV grid
+                nx, ny = ax + i, ay + j  # Coordinate nella mappa
+
+                if 0 <= nx < self.grid_size and 0 <= ny < self.grid_size:
+                    cell_povs = torch.tensor(self.state[nx, ny]['pov'], dtype=torch.float32).detach()
+                    pov_grid[gx, gy] = cell_povs
+                else:
+                    pov_grid[gx, gy] = torch.zeros(pov_size)  # Fuori dalla griglia → padding
+
+        obs_3x3_flat = obs_3x3.view(-1)
+        extra_pov_flat = pov_grid.view(-1)  # Flatten [n*n*9]
+
+        all_obs = torch.cat((obs_3x3_flat, extra_pov_flat), dim=0)
+
+        return all_obs.detach()
 
     def _init_observation_space(self, extra_pov_radius=1):
-        n_center = 3 * 3 * 18
-        n = 2 * extra_pov_radius + 3
-        n_pov_cells = n * n
-        pov_size = len(self.state[0, 0]['pov'])
+        n_center = 3 * 3 * 18  # Parte centrale fissa
+        n = 2 * extra_pov_radius + 3  # Dimensione lato della griglia POV
+        n_pov_cells = n * n  # Celle nella POV grid (incluso centro)
+        pov_size = len(self.state[0, 0]['pov'])  # Tipicamente 9
+
         total_obs_len = n_center + n_pov_cells * pov_size
-        self.observation_space = spaces.Box(low=0, high=1, shape=(total_obs_len,), dtype=np.float32)
+        self.observation_space = spaces.Box(
+            low=0,
+            high=1,
+            shape=(total_obs_len,),
+            dtype=np.float32
+        )
     
     def render(self, mode='human'):
         if self.window is None:

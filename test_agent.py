@@ -5,7 +5,8 @@ import torch
 from stable_baselines3 import DQN
 from callback import RewardLoggerCallback
 from custumCNN import CustomCNN
-from custum_map import GridMappingEnv
+# from custum_map import GridMappingEnv
+from new_custum_map_simple_GP import GridMappingEnv
 from doubleCNN import DoubleCNNExtractor
 from helper import save_dict, load_models
 import tqdm as tqdm
@@ -24,7 +25,8 @@ def create_env(size, step, base_model, ig_model, strategy, render=False):
                          ig_model=ig_model,
                          base_model=base_model,
                          strategy=strategy,
-                         render_mode='human' if render else None)
+                         render_mode='human' if render else None,
+                         device=device)
     return env
 
 def set_seed(seed, env=None):
@@ -89,7 +91,7 @@ def train(episodes, render, strategy, device, buffer_size=1_000_000):
 
     # Unisci callback personalizzato e salvataggio
     callback = CallbackList([reward_logger, checkpoint_callback])
-    base_model, ig_model = load_models()
+    base_model, ig_model = load_models(device)
     env = create_env(size=50, step=3000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
 
     # MlpPolicy: rete completamente connessa (https://stable-baselines3.readthedocs.io/en/master/guide/custom_policy.html)

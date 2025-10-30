@@ -13,8 +13,8 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import gym
-from gym import spaces
+import gymnasium as gym
+from gymnasium import spaces
 
 # ---------------------------
 # Observer (stateful LSTM)
