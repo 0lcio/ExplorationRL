@@ -21,7 +21,7 @@ from gymnasium import spaces
 # ---------------------------
 class ObserverLSTM(nn.Module):
     def __init__(self, dy=17, dc=9, de=8, n_classes=8, hidden=128, layers=1,
-                 m0=0.0, s0=10.0):  # AGGIUNTO m0, s0
+                 m0=0.0, s0=10.0):  # ADDED m0, s0
         super().__init__()
         self.dy = dy
         self.dc = dc
@@ -29,12 +29,12 @@ class ObserverLSTM(nn.Module):
         self.n_classes = n_classes
         self.hidden = hidden
         self.layers = layers
-        # NUOVO: reference prior
+        # NEW: reference prior
         self.m0 = float(m0)
         self.s0 = float(s0)
         self.s0_inv = 1.0 / self.s0
 
-        # MODIFICATO: Input dims ora include gp_mean, gp_logvar, obs_count
+        # MODIFIED: Input dims now include gp_mean, gp_logvar, obs_count
         self.in_dim = dy + dc + 1 + 1 + 1 + 1  # +vis +gp_mean +gp_logvar +obs_count
         self.lstm = nn.LSTM(self.in_dim, hidden, num_layers=layers, batch_first=True)
         self.fc = nn.Linear(hidden + de, hidden)
@@ -42,7 +42,7 @@ class ObserverLSTM(nn.Module):
         self.logvar_head = nn.Linear(hidden, 1)
 
     def step(self, y_t, a_t, vis_t, gp_mean_t, gp_logvar_t, obs_count_t, e, hx):
-        """MODIFICATO: aggiunti parametri gp_mean_t, gp_logvar_t, obs_count_t"""
+        """MODIFIED: added params gp_mean_t, gp_logvar_t, obs_count_t"""
         inp = torch.cat([y_t, a_t, vis_t, gp_mean_t, gp_logvar_t, obs_count_t], dim=-1).unsqueeze(1)
         out, hx_next = self.lstm(inp, hx)
         last = out[:, -1, :]
@@ -53,7 +53,7 @@ class ObserverLSTM(nn.Module):
         return logits, logvar, hx_next
 
     def forward_sequence(self, y_seq, a_seq, vis_seq, gp_mean_seq, gp_logvar_seq, obs_count_seq, e, lengths=None, hx=None):
-        """MODIFICATO: aggiunti parametri GP sequences"""
+        """MODIFIED: added GP sequence parameters"""
         inp = torch.cat([y_seq, a_seq, vis_seq, gp_mean_seq, gp_logvar_seq, obs_count_seq], dim=-1)
         if lengths is not None:
             packed = nn.utils.rnn.pack_padded_sequence(inp, lengths.cpu(), batch_first=True, enforce_sorted=False)
@@ -69,7 +69,7 @@ class ObserverLSTM(nn.Module):
         return logits, logvar, hx_out
 
     def logits_to_site(self, logits, clamp_var_floor=1e-3):
-        """NUOVO METODO: converte logits in parametri naturali Gaussiani"""
+        """NEW METHOD: converts logits into Gaussian natural parameters"""
         q = F.softmax(logits, dim=-1)
         k = torch.arange(1, self.n_classes + 1, dtype=q.dtype, device=q.device).unsqueeze(0)
         mu = (q * k).sum(-1, keepdim=True)
@@ -81,7 +81,7 @@ class ObserverLSTM(nn.Module):
         return q, mu, var, h_site, J_site
 
 # ----------------------------
-# costruzione matrice di covarianza RBF e precisione
+# build RBF covariance matrix and precision
 # ----------------------------
 def build_rbf_precision(grid_H, grid_W, lengthscale=1.0, variance=1.0, jitter=1e-6, device='cpu'):
     """
@@ -111,7 +111,7 @@ class ObserverStateStore:
         self.hiddens = {}
         self.embs = {}
         self.last_msg = {}
-        self.obs_count = {}  # NUOVO: contatore osservazioni per cella
+        self.obs_count = {}  # NEW: per-cell observation counter
 
     def init_cell(self, cell_idx, e_tensor):
         h0 = torch.zeros(self.model.layers, 1, self.model.hidden, device=self.device)
@@ -119,11 +119,11 @@ class ObserverStateStore:
         self.hiddens[cell_idx] = (h0, c0)
         self.embs[cell_idx] = e_tensor.to(self.device).reshape(1, -1)
         self.last_msg[cell_idx] = None
-        self.obs_count[cell_idx] = 0  # NUOVO
+        self.obs_count[cell_idx] = 0  # NEW
 
     @torch.no_grad()
     def step(self, cell_idx, y_t, a_t, vis_t, gp_mean_t, gp_logvar_t):
-        """MODIFICATO: ora riceve gp_mean_t e gp_logvar_t"""
+        """MODIFIED: now receives gp_mean_t and gp_logvar_t"""
         hx = self.hiddens[cell_idx]
         e = self.embs[cell_idx]
         device = e.device
@@ -139,12 +139,12 @@ class ObserverStateStore:
         q, mu, var, h_site, J_site = self.model.logits_to_site(logits)
 
         self.hiddens[cell_idx] = hx_next
-        self.obs_count[cell_idx] += 1  # NUOVO: incrementa contatore
+        self.obs_count[cell_idx] += 1  # NEW: increment counter
 
         msg = {
             'logits': logits.detach(), 'q': q.detach(),
             'mu': mu.detach(), 'var': var.detach(), 'logvar': logvar.detach(),
-            'h_site': h_site.detach(), 'J_site': J_site.detach()  # NUOVO
+            'h_site': h_site.detach(), 'J_site': J_site.detach()  # NEW
         }
         self.last_msg[cell_idx] = msg
         return msg  
@@ -201,7 +201,7 @@ class GridMappingEnv(gym.Env):
             dy=17, dc=9, de=self.cell_embedding_dim, 
             n_classes=self.N_CLASSES,
             hidden=128, layers=1, 
-            m0=self.m0, s0=self.s0  # AGGIUNTI parametri prior
+            m0=self.m0, s0=self.s0  # ADDED prior params
         ).to(self.device)
         # store for per-cell hx and embeddings
         self.obs_store = ObserverStateStore(self.observer, H=self.grid_size, W=self.grid_size,
@@ -210,8 +210,8 @@ class GridMappingEnv(gym.Env):
         Ncells = self.grid_size * self.grid_size
         D = Ncells * self.dx
 
-        # costruisci precisione RBF (global prior)
-        lengthscale = 2.0   # lunghezza di correlazione (da tuning)
+        # build RBF precision (global prior)
+        lengthscale = 2.0   # correlation lengthscale (tunable)
         variance = 1.0
         jitter = 1e-5
         self.Lambda0, self._coords = build_rbf_precision(
@@ -316,21 +316,21 @@ class GridMappingEnv(gym.Env):
     # replace message + global solve
     # -------------------------
     def replace_message_and_solve(self, cell_idx, new_h, new_J):
-        """COMPLETAMENTE RISCRITTO per gestire correttamente scalari"""
+        """COMPLETELY REWRITTEN to correctly handle scalars"""
         dx = self.dx
         sl = slice(cell_idx * dx, (cell_idx + 1) * dx)
         
         # remove old site
         old = self._msg_cache.get(cell_idx, None)
         if old is not None:
-            old_h = old['h'].squeeze().item()  # MODIFICATO: estrae scalar
-            old_J = old['J'].squeeze().item()  # MODIFICATO: estrae scalar
+            old_h = old['h'].squeeze().item()  # MODIFIED: extract scalar
+            old_J = old['J'].squeeze().item()  # MODIFIED: extract scalar
             self.Lambda[sl, sl] = self.Lambda[sl, sl] - old_J
             self.eta[sl] = self.eta[sl] - old_h
         
         # add new
-        h_add = new_h.squeeze().item()  # MODIFICATO
-        J_add = new_J.squeeze().item()  # MODIFICATO
+        h_add = new_h.squeeze().item()  
+        J_add = new_J.squeeze().item()
         
         self.Lambda[sl, sl] = self.Lambda[sl, sl] + J_add
         self.eta[sl] = self.eta[sl] + h_add
@@ -355,7 +355,7 @@ class GridMappingEnv(gym.Env):
             )
         self.global_mean = m_vec
 
-        # NUOVO: calcola covarianza globale
+        # NEW: compute global covariance
         try:
             cov = torch.linalg.inv(
                 self.Lambda + 1e-6 * torch.eye(self.Lambda.size(0), device=self.device)
@@ -374,13 +374,13 @@ class GridMappingEnv(gym.Env):
         prev_pos = list(self.agent_pos)
         temp_pos = list(self.agent_pos)
 
-        if action == 0:  # su
+        if action == 0:  # up
             temp_pos[0] = max(self.agent_pos[0] - 1, 0)
-        elif action == 1:  # destra
+        elif action == 1:  # right
             temp_pos[1] = min(self.agent_pos[1] + 1, self.grid_size - 1)
-        elif action == 2:  # giù
+        elif action == 2:  # down
             temp_pos[0] = min(self.agent_pos[0] + 1, self.grid_size - 1)
-        elif action == 3:  # sinistra
+        elif action == 3:  # left
             temp_pos[1] = max(self.agent_pos[1] - 1, 0)
 
         action_score = self._update_pov_ig(temp_pos, prev_pos, update=False)
@@ -395,17 +395,17 @@ class GridMappingEnv(gym.Env):
         self.current_steps += 1
         prev_pos = list(self.agent_pos)
 
-        # Esegui l'azione
+        # Execute the action
         self._move_agent(action)
 
-        # Calcola il reward
+        # Compute the reward
         if self.strategy in ('pred_ig_reward', 'pred_no_train', 'pred_random_agent'):
             reward = self._update_pov_ig(self.agent_pos, prev_pos)
         else:
             new_pov_observed, best_next_pov_visited = self._update_pov_best_view(self.agent_pos)
             reward = self._calculate_reward_best_view(new_pov_observed, best_next_pov_visited, prev_pos)
 
-        # Verifica condizioni di terminazione
+        # Check termination conditions
         terminated = self._check_termination()
         truncated = self.current_steps >= self.max_steps
         if terminated:
@@ -459,23 +459,23 @@ class GridMappingEnv(gym.Env):
     def update_cell(self, cell, i, j, update):
         pov_index = (i + 1) * 3 + (j + 1)
 
-        # Se il punto di vista è già stato osservato, non aggiornare
+        # If the viewpoint has already been observed, do not update
         if cell['pov'][pov_index] == 1:
-            return 0  # Nessun reward aggiunto se già osservato
+            return 0  # No reward added if already observed
 
         cell_povs = cell['pov'].copy()
         cell_povs[pov_index] = 1
-        # Aggiorna lo stato di osservazione
+        # Update the observation state
         if update:
             cell['pov'][pov_index] = 1
 
-        # Ottieni gli indici dei punti di vista osservati
+        # Get indices of observed viewpoints
         observed_indices = np.flatnonzero(cell_povs)
 
-        # Crea l'input array per il modello in base ai punti di vista osservati
+        # Create the input array for the model based on observed viewpoints
         input_array = self._get_cell_input_array(cell, observed_indices)
 
-        # Aggiorna la matrice 'obs' della cella
+        # Update the cell's 'obs' matrix
         if update:
             m = input_array.shape[0]
             cell['obs'][:m, :] = input_array
@@ -523,11 +523,11 @@ class GridMappingEnv(gym.Env):
             nx, ny = cell['_coords']
             cell_idx = self._cell_index(nx, ny)
             
-            # NUOVO BLOCCO: preparare GP features
+            # NEW BLOCK: prepare GP features
             sl = slice(cell_idx * self.dx, (cell_idx + 1) * self.dx)
             gp_mean_cell = self.global_mean[sl].reshape(1, 1)
             
-            # approssimazione varianza dalla precisione diagonale
+            # approximate variance from diagonal precision
             approx_prec = self.Lambda[sl, sl].squeeze().item()
             gp_var_cell = 1.0 / max(approx_prec, 1e-9)
             gp_logvar_cell = torch.tensor(
@@ -536,7 +536,7 @@ class GridMappingEnv(gym.Env):
                 device=self.device
             )
             
-            # MODIFICATO: chiamata con GP params
+            # MODIFIED: call with GP params
             msg = self.obs_store.step(
                 cell_idx, y_t, a_t, vis_t=1,
                 gp_mean_t=gp_mean_cell,
@@ -562,7 +562,7 @@ class GridMappingEnv(gym.Env):
             total_reward += ig
             cell['_last_entropy'] = current_entropy
             
-            # MODIFICATO: usa msg['h_site'] e msg['J_site']
+            # MODIFIED: use msg['h_site'] and msg['J_site']
             h_site = msg['h_site']
             J_site = msg['J_site']
             self.replace_message_and_solve(cell_idx, h_site, J_site)
@@ -590,7 +590,7 @@ class GridMappingEnv(gym.Env):
                             new_pov_count += 1
                         if cell['best_next_pov'] == pov_index:
                             best_next_pov_visited += 1
-                    # Aggiorna stato della cella con base_model (legacy)
+                    # Update the cell state with base_model (legacy)
                     self._update_cell_state(cell)
         return new_pov_count, best_next_pov_visited
 
@@ -635,7 +635,6 @@ class GridMappingEnv(gym.Env):
                 nx, ny = cell['_coords']
                 cell_idx = self._cell_index(nx, ny)
                 
-                # AGGIUNGI QUESTO BLOCCO (come in _calculate_reward_ig):
                 sl = slice(cell_idx * self.dx, (cell_idx + 1) * self.dx)
                 gp_mean_cell = self.global_mean[sl].reshape(1, 1)
                 approx_prec = self.Lambda[sl, sl].squeeze().item()
@@ -646,7 +645,7 @@ class GridMappingEnv(gym.Env):
                     device=self.device
                 )
                 
-                # CHIAMATA CORRETTA:
+                # CORRECT CALL:
                 msg = self.obs_store.step(
                     cell_idx, y_t, a_t, vis_t=1,
                     gp_mean_t=gp_mean_cell,
@@ -759,7 +758,7 @@ class GridMappingEnv(gym.Env):
                             except Exception:
                                 q = torch.ones(self.N_CLASSES) / float(self.N_CLASSES)
 
-                        curr_entropy_2d = curr_entropy.unsqueeze(0)  # Da (1,) a (1, 1)
+                        curr_entropy_2d = curr_entropy.unsqueeze(0)  # From (1,) to (1, 1)
                         q_2d = q.unsqueeze(0)
                         curr_entropy_2d = curr_entropy_2d.to(self.device)
                         q_2d = q_2d.to(self.device)
@@ -801,7 +800,7 @@ class GridMappingEnv(gym.Env):
 # Training function (supervised)
 # ----------------------------
 def train_observer_on_env(env, observer_model, optimizer, device='cpu'):
-    """Train observer usando supervised learning sui dati raccolti"""
+    """Train observer using supervised learning on collected data"""
     observer_model.train()
     criterion = nn.CrossEntropyLoss()
     
