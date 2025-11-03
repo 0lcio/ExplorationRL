@@ -20,14 +20,8 @@ from gymnasium import spaces
 # Observer (stateful LSTM)
 # ---------------------------
 class ObserverLSTM(nn.Module):
-    def __init__(self, dy=17, dc=9, de=8, n_classes=8, hidden=128, layers=1, diag_precision=True):
-        """
-        dy: feature dim per view (17)
-        dc: pov one-hot dim (9)
-        de: cell embedding dim
-        n_classes: number of ordinal classes (1..N) -> logits output dim
-        diag_precision: produce scalar variance for ordinal latent
-        """
+    def __init__(self, dy=17, dc=9, de=8, n_classes=8, hidden=128, layers=1,
+                 m0=0.0, s0=10.0):  # AGGIUNTO m0, s0
         super().__init__()
         self.dy = dy
         self.dc = dc
@@ -35,46 +29,21 @@ class ObserverLSTM(nn.Module):
         self.n_classes = n_classes
         self.hidden = hidden
         self.layers = layers
-        self.in_dim = dy + dc + 1  # +1 for vis flag; cell embedding concatenated after LSTM
+        # NUOVO: reference prior
+        self.m0 = float(m0)
+        self.s0 = float(s0)
+        self.s0_inv = 1.0 / self.s0
+
+        # MODIFICATO: Input dims ora include gp_mean, gp_logvar, obs_count
+        self.in_dim = dy + dc + 1 + 1 + 1 + 1  # +vis +gp_mean +gp_logvar +obs_count
         self.lstm = nn.LSTM(self.in_dim, hidden, num_layers=layers, batch_first=True)
         self.fc = nn.Linear(hidden + de, hidden)
         self.logit_head = nn.Linear(hidden, n_classes)
-        self.diag_precision = diag_precision
-        if diag_precision:
-            # predict log-variance (scalar) for ordinal latent; clamp during usage
-            self.logvar_head = nn.Linear(hidden, 1)
-        else:
-            # Not implemented full matrix precision in this patch
-            raise NotImplementedError("Full-matrix precision not implemented in this patch")
+        self.logvar_head = nn.Linear(hidden, 1)
 
-    def forward_sequence(self, y_seq, a_seq, vis_seq, e, lengths=None, hx=None):
-        """
-        y_seq: [B,T,dy], a_seq: [B,T,dc], vis_seq: [B,T,1], e: [B,de]
-        lengths: optional, for packing
-        returns: logits [B,n_classes], logvar [B,1], hx_out
-        """
-        inp = torch.cat([y_seq, a_seq, vis_seq], dim=-1)  # [B,T,in_dim]
-        if lengths is not None:
-            # pack if lengths provided (not required if all same length)
-            packed = torch.nn.utils.rnn.pack_padded_sequence(inp, lengths.cpu(), batch_first=True, enforce_sorted=False)
-            packed_out, hx_out = self.lstm(packed, hx)
-            out, _ = torch.nn.utils.rnn.pad_packed_sequence(packed_out, batch_first=True)
-        else:
-            out, hx_out = self.lstm(inp, hx)  # [B,T,H]
-        last = out[:, -1, :]
-        feats = torch.cat([last, e], dim=-1)
-        h = torch.relu(self.fc(feats))
-        logits = self.logit_head(h)
-        logvar = self.logvar_head(h)
-        return logits, logvar, hx_out
-
-    def step(self, y_t, a_t, vis_t, e, hx):
-        """
-        single-step streaming update
-        y_t: [B,dy], a_t: [B,dc], vis_t: [B,1], e: [B,de], hx: (h,c)
-        return logits [B,n_classes], logvar [B,1], hx_next
-        """
-        inp = torch.cat([y_t, a_t, vis_t], dim=-1).unsqueeze(1)  # [B,1,in_dim]
+    def step(self, y_t, a_t, vis_t, gp_mean_t, gp_logvar_t, obs_count_t, e, hx):
+        """MODIFICATO: aggiunti parametri gp_mean_t, gp_logvar_t, obs_count_t"""
+        inp = torch.cat([y_t, a_t, vis_t, gp_mean_t, gp_logvar_t, obs_count_t], dim=-1).unsqueeze(1)
         out, hx_next = self.lstm(inp, hx)
         last = out[:, -1, :]
         feats = torch.cat([last, e], dim=-1)
@@ -82,6 +51,52 @@ class ObserverLSTM(nn.Module):
         logits = self.logit_head(h)
         logvar = self.logvar_head(h)
         return logits, logvar, hx_next
+
+    def forward_sequence(self, y_seq, a_seq, vis_seq, gp_mean_seq, gp_logvar_seq, obs_count_seq, e, lengths=None, hx=None):
+        """MODIFICATO: aggiunti parametri GP sequences"""
+        inp = torch.cat([y_seq, a_seq, vis_seq, gp_mean_seq, gp_logvar_seq, obs_count_seq], dim=-1)
+        if lengths is not None:
+            packed = nn.utils.rnn.pack_padded_sequence(inp, lengths.cpu(), batch_first=True, enforce_sorted=False)
+            packed_out, hx_out = self.lstm(packed, hx)
+            out, _ = nn.utils.rnn.pad_packed_sequence(packed_out, batch_first=True)
+        else:
+            out, hx_out = self.lstm(inp, hx)
+        last = out[:, -1, :]
+        feats = torch.cat([last, e], dim=-1)
+        h = torch.relu(self.fc(feats))
+        logits = self.logit_head(h)
+        logvar = self.logvar_head(h)
+        return logits, logvar, hx_out
+
+    def logits_to_site(self, logits, clamp_var_floor=1e-3):
+        """NUOVO METODO: converte logits in parametri naturali Gaussiani"""
+        q = F.softmax(logits, dim=-1)
+        k = torch.arange(1, self.n_classes + 1, dtype=q.dtype, device=q.device).unsqueeze(0)
+        mu = (q * k).sum(-1, keepdim=True)
+        var = (q * (k - mu)**2).sum(-1, keepdim=True)
+        var = var.clamp_min(clamp_var_floor)
+        s_inv = 1.0 / var
+        h_site = (s_inv * mu - self.s0_inv * self.m0)
+        J_site = (s_inv - self.s0_inv)
+        return q, mu, var, h_site, J_site
+
+# ----------------------------
+# costruzione matrice di covarianza RBF e precisione
+# ----------------------------
+def build_rbf_precision(grid_H, grid_W, lengthscale=1.0, variance=1.0, jitter=1e-6, device='cpu'):
+    """
+    Build full covariance K for all cells and return Lambda0 = K^{-1}.
+    """
+    xs = np.arange(grid_H)
+    ys = np.arange(grid_W)
+    coords = np.array([[i, j] for i in xs for j in ys])
+    N = coords.shape[0]
+    d2 = ((coords[:, None, :] - coords[None, :, :]) ** 2).sum(axis=-1)
+    K = variance * np.exp(-0.5 * d2 / (lengthscale**2))
+    K += jitter * np.eye(N)
+    K_t = torch.tensor(K, dtype=torch.float32, device=device)
+    Lambda0 = torch.linalg.inv(K_t)
+    return Lambda0, torch.tensor(coords, dtype=torch.float32, device=device)
 
 # ---------------------------
 # ObserverStateStore: keeps hx and last message per cell
@@ -93,67 +108,46 @@ class ObserverStateStore:
         self.H = H
         self.W = W
         self.de = de
-        # dictionaries keyed by cell_idx (r*W + c)
         self.hiddens = {}
         self.embs = {}
         self.last_msg = {}
+        self.obs_count = {}  # NUOVO: contatore osservazioni per cella
 
     def init_cell(self, cell_idx, e_tensor):
-        # initialize LSTM hidden/cell states for this cell
         h0 = torch.zeros(self.model.layers, 1, self.model.hidden, device=self.device)
         c0 = torch.zeros(self.model.layers, 1, self.model.hidden, device=self.device)
         self.hiddens[cell_idx] = (h0, c0)
         self.embs[cell_idx] = e_tensor.to(self.device).reshape(1, -1)
         self.last_msg[cell_idx] = None
+        self.obs_count[cell_idx] = 0  # NUOVO
 
     @torch.no_grad()
-    def step(self, cell_idx, y_t, a_t, vis_t):
-        """
-        Process one new view for cell cell_idx.
-        y_t: numpy array or tensor shape [dy]
-        a_t: one-hot pov [dc]
-        vis_t: 0/1 scalar
-        Returns a dict: {'logits','q','mu','var','logvar'}
-        """
+    def step(self, cell_idx, y_t, a_t, vis_t, gp_mean_t, gp_logvar_t):
+        """MODIFICATO: ora riceve gp_mean_t e gp_logvar_t"""
         hx = self.hiddens[cell_idx]
-        e = self.embs[cell_idx]  # [1,de]
+        e = self.embs[cell_idx]
         device = e.device
 
-        y_t = torch.as_tensor(y_t, dtype=torch.float32, device=device).unsqueeze(0)  # [1,dy]
-        a_t = torch.as_tensor(a_t, dtype=torch.float32, device=device).unsqueeze(0)  # [1,dc]
-        vis_t = torch.as_tensor([[float(vis_t)]], dtype=torch.float32, device=device)  # [1,1]
+        y_t = torch.as_tensor(y_t, dtype=torch.float32, device=device).unsqueeze(0)
+        a_t = torch.as_tensor(a_t, dtype=torch.float32, device=device).unsqueeze(0)
+        vis_t = torch.as_tensor([[float(vis_t)]], dtype=torch.float32, device=device)
+        gp_mean_t = gp_mean_t.reshape(1,1).to(device)
+        gp_logvar_t = gp_logvar_t.reshape(1,1).to(device)
+        obs_count = torch.tensor([[float(self.obs_count[cell_idx])]], dtype=torch.float32, device=device)
 
-        logits, logvar, hx_next = self.model.step(y_t, a_t, vis_t, e, hx)  # [1,N], [1,1]
-        q = logits.log_softmax(-1).exp()  # [1,N]
-        # convert categorical -> numeric mean & var on ordinal scale 1..N
-        k = torch.arange(1, q.size(-1) + 1, dtype=torch.float32, device=device).unsqueeze(0)  # [1,N]
-        mu = (q * k).sum(-1, keepdim=True)             # [1,1]
-        var = (q * (k - mu)**2).sum(-1, keepdim=True)  # [1,1]
-        var = var.clamp_min(1e-3)
+        logits, logvar, hx_next = self.model.step(y_t, a_t, vis_t, gp_mean_t, gp_logvar_t, obs_count, e, hx)
+        q, mu, var, h_site, J_site = self.model.logits_to_site(logits)
+
         self.hiddens[cell_idx] = hx_next
-        msg = {'logits': logits.detach(), 'q': q.detach(), 'mu': mu.detach(), 'var': var.detach(), 'logvar': logvar.detach()}
-        self.last_msg[cell_idx] = msg
-        return msg
+        self.obs_count[cell_idx] += 1  # NUOVO: incrementa contatore
 
-# ---------------------------
-# Helpers: categorical -> natural params (for Gaussian fusion)
-# ---------------------------
-def categorical_to_natural_params(mu, var, m0=0.0, s0=10.0):
-    """
-    mu: tensor [1,1], var: [1,1], m0,s0 scalars or tensors
-    returns h: [1,1], J: [1,1,1] (we will use squeezed dims when fusing)
-    """
-    # ensure tensors
-    if not torch.is_tensor(m0):
-        m0 = torch.tensor(float(m0), dtype=mu.dtype, device=mu.device).reshape(1, 1)
-    if not torch.is_tensor(s0):
-        s0 = torch.tensor(float(s0), dtype=mu.dtype, device=mu.device).reshape(1, 1)
-    s0_inv = 1.0 / s0
-    s_inv = 1.0 / var
-    # natural params: Lambda_post = S0^{-1} + S^{-1}, we provide site as difference
-    J_site = (s_inv - s0_inv).reshape(1, 1, 1)  # [B,1,1]
-    h_site = (s_inv * mu - s0_inv * m0).reshape(1, 1)  # [B,1]
-    return h_site, J_site
+        msg = {
+            'logits': logits.detach(), 'q': q.detach(),
+            'mu': mu.detach(), 'var': var.detach(), 'logvar': logvar.detach(),
+            'h_site': h_site.detach(), 'J_site': J_site.detach()  # NUOVO
+        }
+        self.last_msg[cell_idx] = msg
+        return msg  
 
 # ---------------------------
 # The modified GridMappingEnv
@@ -198,42 +192,47 @@ class GridMappingEnv(gym.Env):
         self.N_CLASSES = 8
         # observer architecture
         self.cell_embedding_dim = 8
-        self.observer = ObserverLSTM(dy=17, dc=9, de=self.cell_embedding_dim, n_classes=self.N_CLASSES,
-                                     hidden=128, layers=1, diag_precision=True).to(self.device)
+
+        self.dx = 1
+        self.m0 = 0.0   # prior mean
+        self.s0 = 10.0  # prior variance
+
+        self.observer = ObserverLSTM(
+            dy=17, dc=9, de=self.cell_embedding_dim, 
+            n_classes=self.N_CLASSES,
+            hidden=128, layers=1, 
+            m0=self.m0, s0=self.s0  # AGGIUNTI parametri prior
+        ).to(self.device)
         # store for per-cell hx and embeddings
         self.obs_store = ObserverStateStore(self.observer, H=self.grid_size, W=self.grid_size,
                                            de=self.cell_embedding_dim, device=self.device)
 
-        # Gaussian fusion prior: dx = 1 (ordinal scalar)
-        self.dx = 1
-        self.m0 = 0.0   # reference prior mean (on ordinal numeric scale)
-        self.s0 = 10.0  # reference prior variance (large = weak prior)
         Ncells = self.grid_size * self.grid_size
         D = Ncells * self.dx
-        # Build dense Laplacian-like precision prior (small grid -> dense ok)
-        self.Lambda0 = torch.zeros((D, D), dtype=torch.float32, device=self.device)
-        lam = 0.5
-        for r in range(self.grid_size):
-            for c in range(self.grid_size):
-                i = r * self.grid_size + c
-                sl = slice(i * self.dx, (i + 1) * self.dx)
-                neighbors = []
-                for dr, dc in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
-                    rr, cc = r + dr, c + dc
-                    if 0 <= rr < self.grid_size and 0 <= cc < self.grid_size:
-                        neighbors.append(rr * self.grid_size + cc)
-                deg = len(neighbors)
-                self.Lambda0[sl, sl] += deg * torch.eye(self.dx, device=self.device)
-                for nb in neighbors:
-                    jsl = slice(nb * self.dx, (nb + 1) * self.dx)
-                    self.Lambda0[sl, jsl] += -1.0 * torch.eye(self.dx, device=self.device)
-        # initial natural param
+
+        # costruisci precisione RBF (global prior)
+        lengthscale = 2.0   # lunghezza di correlazione (da tuning)
+        variance = 1.0
+        jitter = 1e-5
+        self.Lambda0, self._coords = build_rbf_precision(
+            self.grid_size, self.grid_size,
+            lengthscale=lengthscale,
+            variance=variance,
+            jitter=jitter,
+            device=self.device
+        )
+
+        # prior natural param
         m0_vec = torch.full((D,), float(self.m0), device=self.device)
         self.eta0 = self.Lambda0 @ m0_vec
         self.Lambda = self.Lambda0.clone()
         self.eta = self.eta0.clone()
-        self.global_mean = torch.linalg.solve(self.Lambda + 1e-6 * torch.eye(D, device=self.device), self.eta)  # initial
-        self._msg_cache = {}  # per-cell cached message for replace
+        self.global_mean = torch.linalg.solve(
+            self.Lambda + 1e-6 * torch.eye(D, device=self.device), 
+            self.eta
+        )
+        self._msg_cache = {}
+        self._global_cov = None
 
         # embeddings per cell (trainable embedding option: use nn.Embedding externally; here simple init)
         self.cell_embeddings = {}
@@ -317,34 +316,55 @@ class GridMappingEnv(gym.Env):
     # replace message + global solve
     # -------------------------
     def replace_message_and_solve(self, cell_idx, new_h, new_J):
-        """
-        new_h: [1,1], new_J: [1,1,1]
-        Replace cached message for cell cell_idx (if any) and update Lambda, eta and global mean.
-        """
+        """COMPLETAMENTE RISCRITTO per gestire correttamente scalari"""
         dx = self.dx
         sl = slice(cell_idx * dx, (cell_idx + 1) * dx)
-        # subtract old
+        
+        # remove old site
         old = self._msg_cache.get(cell_idx, None)
         if old is not None:
-            old_h = old['h'].squeeze(0)  # [dx]
-            old_J = old['J'].squeeze(0)  # [dx,dx]
+            old_h = old['h'].squeeze().item()  # MODIFICATO: estrae scalar
+            old_J = old['J'].squeeze().item()  # MODIFICATO: estrae scalar
             self.Lambda[sl, sl] = self.Lambda[sl, sl] - old_J
             self.eta[sl] = self.eta[sl] - old_h
+        
         # add new
-        h_add = new_h.squeeze(0).squeeze(-1).to(self.device)  # shape [dx]
-        J_add = new_J.squeeze(0).squeeze(0).to(self.device)   # shape [dx,dx]
+        h_add = new_h.squeeze().item()  # MODIFICATO
+        J_add = new_J.squeeze().item()  # MODIFICATO
+        
         self.Lambda[sl, sl] = self.Lambda[sl, sl] + J_add
         self.eta[sl] = self.eta[sl] + h_add
+        
         # cache
-        self._msg_cache[cell_idx] = {'h': new_h.clone().to(self.device), 'J': new_J.clone().to(self.device)}
-        # numeric stability jitter
+        self._msg_cache[cell_idx] = {
+            'h': new_h.clone().to(self.device), 
+            'J': new_J.clone().to(self.device)
+        }
+
+        # solve
         jitter = 1e-6
         try:
-            m_vec = torch.linalg.solve(self.Lambda + jitter * torch.eye(self.Lambda.size(0), device=self.device), self.eta)
+            m_vec = torch.linalg.solve(
+                self.Lambda + jitter * torch.eye(self.Lambda.size(0), device=self.device), 
+                self.eta
+            )
         except RuntimeError:
-            # fallback: add bigger jitter
-            m_vec = torch.linalg.solve(self.Lambda + 1e-3 * torch.eye(self.Lambda.size(0), device=self.device), self.eta)
+            m_vec = torch.linalg.solve(
+                self.Lambda + 1e-3 * torch.eye(self.Lambda.size(0), device=self.device), 
+                self.eta
+            )
         self.global_mean = m_vec
+
+        # NUOVO: calcola covarianza globale
+        try:
+            cov = torch.linalg.inv(
+                self.Lambda + 1e-6 * torch.eye(self.Lambda.size(0), device=self.device)
+            )
+            self._global_cov = cov
+        except RuntimeError:
+            cov = torch.diag(1.0 / torch.diagonal(self.Lambda).clamp_min(1e-12))
+            self._global_cov = cov
+
         return m_vec
 
     # -------------------------
@@ -481,59 +501,72 @@ class GridMappingEnv(gym.Env):
         return np.array(input_list, dtype=np.float32)
 
     def _calculate_reward_ig(self, cell, input_array, update=True):
-        # For each newly observed view (row) perform an observer step (streaming) and fuse
         total_reward = 0.0
         for row in input_array:
-            pov_onehot = row[:9]       # first 9 entries
-            dist_prob = row[9:]        # the 8 probs
-            # choose the per-view y_t: we use the full 17-d row as y_t here
-            y_t = row.copy().astype(np.float32)  # shape (17,)
+            pov_onehot = row[:9]
+            dist_prob = row[9:]
+            y_t = row.copy().astype(np.float32)
             a_t = pov_onehot.astype(np.float32)
-            # determine cell index in full grid indexing
-            # find cell coordinates in state: this function is called inside loops where we know nx,ny
-            # simpler: search for the exact cell index by scanning state arrays (costly but ok for small grids)
-            # We'll require caller context; to avoid complexity, we assume caller sets a transient field on cell: cell['_coords']=(nx,ny)
-            if '_coords' in cell and cell['_coords'] is not None:
-                nx, ny = cell['_coords']
-            else:
-                # fallback (scan) - find first match
+            
+            # ensure coords
+            if '_coords' not in cell or cell['_coords'] is None:
                 found = False
                 for rr in range(self.grid_size):
                     for cc in range(self.grid_size):
                         if self.state[rr, cc] is cell:
-                            nx, ny = rr, cc
-                            cell['_coords'] = (nx, ny)
+                            cell['_coords'] = (rr, cc)
                             found = True
                             break
                     if found:
                         break
-
+            
+            nx, ny = cell['_coords']
             cell_idx = self._cell_index(nx, ny)
-            msg = self.obs_store.step(cell_idx, y_t, a_t, vis_t=1)
-            q = msg['q']    # [1,N]
-            mu = msg['mu']  # [1,1]
-            var = msg['var']  # [1,1]
-            # entropy on categorical:
+            
+            # NUOVO BLOCCO: preparare GP features
+            sl = slice(cell_idx * self.dx, (cell_idx + 1) * self.dx)
+            gp_mean_cell = self.global_mean[sl].reshape(1, 1)
+            
+            # approssimazione varianza dalla precisione diagonale
+            approx_prec = self.Lambda[sl, sl].squeeze().item()
+            gp_var_cell = 1.0 / max(approx_prec, 1e-9)
+            gp_logvar_cell = torch.tensor(
+                [[math.log(gp_var_cell)]], 
+                dtype=torch.float32, 
+                device=self.device
+            )
+            
+            # MODIFICATO: chiamata con GP params
+            msg = self.obs_store.step(
+                cell_idx, y_t, a_t, vis_t=1,
+                gp_mean_t=gp_mean_cell,
+                gp_logvar_t=gp_logvar_cell
+            )
+            
+            q = msg['q']
+            mu = msg['mu']
+            var = msg['var']
+            
             current_entropy = -(q * (q + 1e-12).log()).sum().detach()
             cell['current_entropy'] = current_entropy
-            # update marker_pred if confident
-            pred_class = torch.argmax(q, dim=1).item() + 1  # classes 1..N
+            
+            pred_class = torch.argmax(q, dim=1).item() + 1
             if pred_class == cell['id']['MARKER_COUNT']:
                 if update:
                     cell['marker_pred'] = 1
-            # compute information gain reward: delta entropy (previous - new)
-            # we have cell['current_entropy'] updated to new entropy, we need previous stored value
-            # in this environment we stored previous in cell when last observed; use cell.get('_last_entropy')
-            prev_ent = cell.get('_last_entropy', torch.tensor(1.0))  # default 1.0
+            
+            prev_ent = cell.get('_last_entropy', torch.tensor(1.0))
             ig = (prev_ent - current_entropy).item()
             if ig < 0:
                 ig = 0.0
             total_reward += ig
             cell['_last_entropy'] = current_entropy
-            # convert to natural params and fuse
-            h_site, J_site = categorical_to_natural_params(mu, var, m0=self.m0, s0=self.s0)
-            # h_site: [1,1], J_site: [1,1,1] -> use replace_message_and_solve
-            self.replace_message_and_solve(cell_idx, h_site.to(self.device), J_site.to(self.device))
+            
+            # MODIFICATO: usa msg['h_site'] e msg['J_site']
+            h_site = msg['h_site']
+            J_site = msg['J_site']
+            self.replace_message_and_solve(cell_idx, h_site, J_site)
+        
         return total_reward
 
     # -------------------------
@@ -581,21 +614,51 @@ class GridMappingEnv(gym.Env):
         input_array = np.array(input_list, dtype=np.float32)
         m = input_array.shape[0]
         if m > 0:
-            cell['obs'][:m, :] = input_array
-
-        if len(observed_indices) != 9:
-            if self.strategy in ('pred_random', 'pred_random_agent'):
-                next_best_pov = torch.randint(0, 9, (1,)).item()
-            else:
-                # use ig_model or observer suggestions
-                if self.ig_model is not None:
-                    ig_prediction = self.ig_model(torch.tensor(input_array))[self.strategy]
-                    next_best_pov = int(torch.argmin(ig_prediction).item())
-                else:
-                    next_best_pov = 0
-            cell['best_next_pov'] = next_best_pov
-        else:
-            cell['best_next_pov'] = -1
+            for row in input_array:
+                pov_onehot = row[:9]
+                dist_prob = row[9:]
+                y_t = row.copy()
+                a_t = pov_onehot
+                
+                # ensure coords cached
+                if '_coords' not in cell:
+                    found = False
+                    for rr in range(self.grid_size):
+                        for cc in range(self.grid_size):
+                            if self.state[rr, cc] is cell:
+                                cell['_coords'] = (rr, cc)
+                                found = True
+                                break
+                        if found:
+                            break
+                
+                nx, ny = cell['_coords']
+                cell_idx = self._cell_index(nx, ny)
+                
+                # AGGIUNGI QUESTO BLOCCO (come in _calculate_reward_ig):
+                sl = slice(cell_idx * self.dx, (cell_idx + 1) * self.dx)
+                gp_mean_cell = self.global_mean[sl].reshape(1, 1)
+                approx_prec = self.Lambda[sl, sl].squeeze().item()
+                gp_var_cell = 1.0 / max(approx_prec, 1e-9)
+                gp_logvar_cell = torch.tensor(
+                    [[math.log(gp_var_cell)]], 
+                    dtype=torch.float32, 
+                    device=self.device
+                )
+                
+                # CHIAMATA CORRETTA:
+                msg = self.obs_store.step(
+                    cell_idx, y_t, a_t, vis_t=1,
+                    gp_mean_t=gp_mean_cell,
+                    gp_logvar_t=gp_logvar_cell
+                )
+                
+                q = msg['q']
+                current_entropy = -(q * (q + 1e-12).log()).sum().detach()
+                cell['current_entropy'] = current_entropy
+                pred_class = torch.argmax(q, dim=1).item() + 1
+                if pred_class == cell['id']['MARKER_COUNT']:
+                    cell['marker_pred'] = 1
 
         # Use observer streaming to produce updated belief if we want (consistent with _calculate_reward_ig)
         # Here we recompute messages for all observed views to ensure last_msg is consistent.
@@ -698,6 +761,9 @@ class GridMappingEnv(gym.Env):
 
                         curr_entropy_2d = curr_entropy.unsqueeze(0)  # Da (1,) a (1, 1)
                         q_2d = q.unsqueeze(0)
+                        curr_entropy_2d = curr_entropy_2d.to(self.device)
+                        q_2d = q_2d.to(self.device)
+                        cell_povs = cell_povs.to(self.device)
                         obs_3x3[i + 1, j + 1] = torch.cat((curr_entropy_2d, q_2d, cell_povs), dim=1).squeeze(0)
 
         # pov grid large neighborhood of pov occupancy (binary)
@@ -730,3 +796,70 @@ class GridMappingEnv(gym.Env):
     def render(self, mode='human'):
         # optional pygame visualization: keep minimal to avoid dependency issues
         print(f"Agent pos: {self.agent_pos} step {self.current_steps}")
+    
+    # ----------------------------
+# Training function (supervised)
+# ----------------------------
+def train_observer_on_env(env, observer_model, optimizer, device='cpu'):
+    """Train observer usando supervised learning sui dati raccolti"""
+    observer_model.train()
+    criterion = nn.CrossEntropyLoss()
+    
+    sequences = []
+    targets = []
+    embeddings = []
+    lengths = []
+    
+    for r in range(env.grid_size):
+        for c in range(env.grid_size):
+            cell = env.state[r, c]
+            obs = cell['obs']
+            obs_nonzero = obs[~np.all(obs == 0, axis=1)]
+            if obs_nonzero.size == 0:
+                continue
+            
+            T = obs_nonzero.shape[0]
+            y_seq = torch.tensor(obs_nonzero, dtype=torch.float32, device=device)
+            a_seq = torch.tensor(obs_nonzero[:, :9], dtype=torch.float32, device=device)
+            vis_seq = torch.ones((T, 1), dtype=torch.float32, device=device)
+            gp_mean_seq = torch.zeros((T, 1), dtype=torch.float32, device=device)
+            gp_logvar_seq = torch.zeros((T, 1), dtype=torch.float32, device=device)
+            obs_count_seq = torch.arange(0, T, dtype=torch.float32, device=device).unsqueeze(-1) / 9.0
+            
+            sequences.append((y_seq, a_seq, vis_seq, gp_mean_seq, gp_logvar_seq, obs_count_seq))
+            targets.append(cell['id']['MARKER_COUNT'] - 1)
+            
+            cell_idx = env._cell_index(r, c)
+            embeddings.append(env.cell_embeddings[cell_idx].unsqueeze(0))
+            lengths.append(T)
+    
+    if len(sequences) == 0:
+        return 0.0
+    
+    total_loss = 0.0
+    for i, seq in enumerate(sequences):
+        y_seq, a_seq, vis_seq, gp_mean_seq, gp_logvar_seq, obs_count_seq = seq
+        
+        y_b = y_seq.unsqueeze(0)
+        a_b = a_seq.unsqueeze(0)
+        vis_b = vis_seq.unsqueeze(0)
+        gp_mean_b = gp_mean_seq.unsqueeze(0)
+        gp_logvar_b = gp_logvar_seq.unsqueeze(0)
+        obs_count_b = obs_count_seq.unsqueeze(0)
+        e_b = embeddings[i].to(device)
+        lengths_b = torch.tensor([lengths[i]], dtype=torch.long)
+        
+        logits, logvar, _ = observer_model.forward_sequence(
+            y_b, a_b, vis_b, gp_mean_b, gp_logvar_b, obs_count_b, e_b, lengths=lengths_b
+        )
+        
+        target = torch.tensor([targets[i]], dtype=torch.long, device=device)
+        loss = criterion(logits, target)
+        
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        
+        total_loss += loss.item()
+    
+    return total_loss / len(sequences)

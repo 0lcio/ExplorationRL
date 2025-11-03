@@ -51,7 +51,8 @@ class MixedExplorationPolicy(DQNPolicy):
                             input_array = input_array[non_zero_mask]
 
                         with torch.no_grad():
-                            output = self.env.ig_model(torch.tensor(input_array).to(self.device))  # [1, 9]
+                            tensor_input = torch.as_tensor(input_array, dtype=torch.float32).to(self.device)
+                            output = self.env.ig_model(tensor_input)  # [1, 9]
                         entropy = output['pred_entropy']
 
                         gain = current_entropy.item() - entropy.min().item()
