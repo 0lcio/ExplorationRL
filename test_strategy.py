@@ -7,4 +7,4 @@ python_executable = sys.executable
 inputs = ["policy2_ig_reward"]
 
 for input_str in inputs:
-    subprocess.run([python_executable, "test_agent.py", input_str])
+    subprocess.run([python_executable, "test_agent_new.py", input_str])

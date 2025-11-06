@@ -999,7 +999,12 @@ def train_observer_on_env(env, observer_model, optimizer, device='cpu'):
                 obs_count_seq = torch.arange(0, T, dtype=torch.float32, device=device).unsqueeze(-1) / 9.0
 
             sequences.append((y_seq, a_seq, vis_seq, gp_mean_seq, gp_logvar_seq, obs_count_seq))
-            targets.append(cell['id']['MARKER_COUNT'] - 1)
+            marker_count = cell['id']['MARKER_COUNT']
+
+            num_classes = 8
+            marker_count = max(0, min(marker_count, num_classes - 1))
+
+            targets.append(marker_count)
             lengths.append(T)
 
     if len(sequences) == 0:

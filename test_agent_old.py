@@ -92,7 +92,7 @@ def train(episodes, render, strategy, device, buffer_size=1_000_000):
     # Unisci callback personalizzato e salvataggio
     callback = CallbackList([reward_logger, checkpoint_callback])
     base_model, ig_model = load_models(device)
-    env = create_env(size=50, step=3000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
+    env = create_env(size=20, step=1000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
 
     # MlpPolicy: rete completamente connessa (https://stable-baselines3.readthedocs.io/en/master/guide/custom_policy.html)
     # input: obs --> [3, 3, 9, 17] ---> flatten = 1377
@@ -163,7 +163,7 @@ def test(render, strategy, initial_seed=42, num_runs=10):
 
     test_data = defaultdict(list)
     base_model, ig_model = load_models()
-    env = create_env(size=50, step=3000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
+    env = create_env(size=20, step=1000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
 
 
     # Lista per tenere traccia delle metriche per ogni run
