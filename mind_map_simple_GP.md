@@ -26,8 +26,8 @@ Based on Gaussian random field based grid, the images with corresponding box cou
   - Match with images, CSV at `dataset_path` must contain (per row):
     - `IMAGE_ID`: unique identifier of the image/tile
     - `BOX_COUNT`: auxiliary integer (e.g., #boxes)
-    - `MARKER_COUNT`: integer in `[1..8]` (target class)
-    - `POV_ID`: integer in `[0..8]` (one of 9 view directions)
+    - `MARKER_COUNT`: integer in `[0..9]`, used only `[1..8]` (target class)
+    - `POV_ID`: integer in `[1..9]` (one of 9 view directions)
     - `P0..P7`: predicted class probabilities for the 8 classes (float in `[0,1]`)
 
 ---
