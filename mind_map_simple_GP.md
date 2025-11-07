@@ -88,9 +88,9 @@ Episode ends early if:
 ### IG-based (model-driven)
 
 - Builds `(m, 17)` input per newly observed POV of each 3×3 neighborhood cell.
-- `base_model(input_array)` → class probabilities; reward is the **expected entropy reduction**.
-- Updates `current_entropy` with expected (#TODO why) and sets `marker_pred=1` when argmax matches `MARKER_COUNT`.
-- r=max{0, current_entropy−expected_entropy}, summed over all new POVs seen in the 3×3 window; then −2 if no movement.
+- `base_model(input_array)` → class probabilities; reward is the entropy reduction (prior entropy-posterior entropy after step).
+- Updates `current_entropy` with posterior and sets `marker_pred=1` when argmax matches `MARKER_COUNT`.
+- r=max{0, prior entropy-posterior entropy}, summed over all new POVs seen in the 3×3 window; then −2 if no movement.
 
 ### Heuristic “best-view”
 
@@ -115,7 +115,6 @@ GridMappingEnv(
 )
 ```
 
-- `strategy`: used as key into IG-model outputs (e.g., `"pred_xxx"`). Internally set to `f"pred_{strategy}"`.
 
 ### Step
 Here’s what env.step(action) does, in order:
@@ -187,7 +186,6 @@ update_cell(cell: dict, i: int, j: int, update: bool) -> np.ndarray | int
 _get_cell_input_array(cell: dict, observed_indices: list[int]) -> np.ndarray  # (m, 17)
 
 # Observations
-_get_observation() -> np.ndarray  # 3×3×18 flattened TODO NEVER USED
 _get_observation_double_cnn(extra_pov_radius: int = 8) -> np.ndarray
 _init_observation_space(extra_pov_radius: int = 8) -> None
 ```
@@ -254,11 +252,5 @@ Sorted based on the importance
 4. not used functions
   - _get_observation() is defined but never used. The environment always uses _get_observation_double_cnn(). Consider removing unused functions to keep the code clean.
   - _update_neighbor_beliefs() is defined but never used. Consider removing it if not needed.
-
-
-
-
-
-
 
 ---
