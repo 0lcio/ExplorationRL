@@ -1,21 +1,13 @@
-# GridMappingEnv – Code Map & API
-
+# Gaussian Process-based Grid Mapping Environment 
 This document summarizes the structure and usage of the environment defined in `new_custum_map_simple_GP.py`.
 
 ## Overview
 
-`GridMappingEnv` is a Gym environment operating on a padded grid. Each inner cell corresponds to an image sample with an 8-class latent marker (`MARKER_COUNT`). The agent moves on the grid, observes local **POVs** (9 viewpoints per cell), and receives rewards either for **entropy reduction** (IG strategy) or for visiting the **predicted best next POV** (heuristic strategy).
+`GridMappingEnv` is a Gym environment operating on a padded grid, generated based on gaussian distribution and. Each inner cell corresponds to an image sample with an 8-class latent marker (`MARKER_COUNT`). The agent moves on the grid, observes local **POVs** (9 viewpoints per cell), and receives rewards either for **entropy reduction** (IG strategy) or for visiting the **predicted best next POV** (heuristic strategy).
 
 ---
 
-## Module Layout
-
-- **Helpers**
-
-  - `gaussian_random_field(n_cell=(20, 20), cluster_radius=3, binary=False) -> np.ndarray`
-  - `create_binned_field(field, n_bins) -> (binned_field: np.ndarray[int], bin_edges)`
-
-- **Environment**
+## Environment
   - `class GridMappingEnv(gym.Env)`
     - Core Gym API methods: `__init__()`, `reset()`, `step()`, `render()`, `close()`
     - Internal methods for movement, observation, reward calculation, termination checks, etc.
@@ -26,22 +18,22 @@ This document summarizes the structure and usage of the environment defined in `
       ```
 
 ---
-
-## Dataset Requirements
-
-CSV at `dataset_path` must contain (per row):
-
-- `IMAGE_ID`: unique identifier of the image/tile
-- `BOX_COUNT`: auxiliary integer (e.g., #boxes)
-- `MARKER_COUNT`: integer in `[1..8]` (target class)
-- `POV_ID`: integer in `[0..8]` (one of 9 view directions)
-- `P0..P7`: predicted class probabilities for the 8 classes (float in `[0,1]`)
-
+## Data Mapping
+Based on Gaussian random field based grid, the images with corresponding box count and POVs are mapped to grid cells, to be observed the agent.
 > The environment matches each grid cell to rows where `MARKER_COUNT` equals the latent class for that cell.
+  - Generate Gaussian random field : `gaussian_random_field(n_cell=(20, 20), cluster_radius=3, binary=False) -> np.ndarray`
+  - Discretize it into n-bins `create_binned_field(field, n_bins) -> (binned_field: np.ndarray[int], bin_edges)`
+  - Match with images, CSV at `dataset_path` must contain (per row):
+    - `IMAGE_ID`: unique identifier of the image/tile
+    - `BOX_COUNT`: auxiliary integer (e.g., #boxes)
+    - `MARKER_COUNT`: integer in `[1..8]` (target class)
+    - `POV_ID`: integer in `[0..8]` (one of 9 view directions)
+    - `P0..P7`: predicted class probabilities for the 8 classes (float in `[0,1]`)
 
 ---
+## Environment
 
-## Grid & State
+### Grid & State
 
 - **Grid padding:** internal grid is `n × n`, environment grid is `(n+2) × (n+2)`.
 - **Per-cell state dictionary:**
@@ -51,11 +43,9 @@ CSV at `dataset_path` must contain (per row):
   - `id`: `dict | None` with keys `{IMAGE_ID, BOX_COUNT, MARKER_COUNT}`
   - `marker_pred`: `0/1` (whether model predicts the correct class)
   - `obs`: `(9, 17)` float — per-POV features: 3by3 block -> 9 rows each with 17 features (`[ one_hot_pov(9) | P0..P7 (8) ]`)
-  - `current_entropy`: scalar belief entropy (torch / float) initialized to uniform 8-class entropy [TODO: helpers.entropy() fromat: what format?]
+  - `current_entropy`: scalar belief entropy (torch / float) initialized to uniform 8-class entropy [TODO: helper infogain check, doesn't store/reuse previous belief entropy, always computes from normal distribution]
 
----
 
-## Actions, Observations, Rewards
 
 ### Actions
 
@@ -93,12 +83,24 @@ Episode ends early if:
    Truncates at `max_steps`.
 
 ---
+## Strategy Notes
 
+### IG-based (model-driven)
+
+- Builds `(m, 17)` input per newly observed POV of each 3×3 neighborhood cell.
+- `base_model(input_array)` → class probabilities; reward is the **expected entropy reduction**.
+- Updates `current_entropy` with expected (#TODO why) and sets `marker_pred=1` when argmax matches `MARKER_COUNT`.
+- r=max{0, current_entropy−expected_entropy}, summed over all new POVs seen in the 3×3 window; then −2 if no movement.
+
+### Heuristic “best-view”
+
+- Marks observed POVs, computes `best_next_pov` per cell using `ig_model` or random policy.
+- Reward favors visiting that best next POV soonest: r=1×new_pov_observed+8×best_next_pov_visited, then −2 if no movement. Here new_pov_observed counts new POVs on mispredicted cells only; best_next_pov_visited counts hits to the per-cell target POV.
+
+---
 ## Class Reference
 
-### `class GridMappingEnv(gym.Env)`
-
-**Constructor**
+### Constructor
 
 ```python
 GridMappingEnv(
@@ -115,7 +117,7 @@ GridMappingEnv(
 
 - `strategy`: used as key into IG-model outputs (e.g., `"pred_xxx"`). Internally set to `f"pred_{strategy}"`.
 
-**Step**
+### Step
 Here’s what env.step(action) does, in order:
 
 1. Bookkeeping
@@ -149,7 +151,7 @@ If terminated, add a +30 terminal bonus to reward.
 `(observation, reward, terminated, truncated, info)` where
 `observation = _get_observation_double_cnn()` (the 3×3 features + extended POV grid flattened).
 
-**Gym API**
+### Gym API
 
 ```python
 obs, info = env.reset(seed: int | None = None, options: dict | None = None)
@@ -158,7 +160,7 @@ env.render(mode="human")
 env.close()
 ```
 
-**Key class functions**
+### Key class functions
 
 ```python
 # Latent field
@@ -169,11 +171,15 @@ _assign_ids_to_cells() -> None               # binds dataset rows to cells
 _move_agent(action: int) -> None
 _check_termination() -> bool
 
-# Strategies
+# Strategies:
+
+# 1. Ig_strategy functions:
 _update_pov_ig(agent_pos, prev_pos, update=True) -> float
+_calculate_reward_ig(cell, input_array, update=True) -> float
+
+# 2. best view strategy functions:
 _update_pov_best_view(agent_pos) -> tuple[int, bool]
 _update_cell_state(cell) -> None
-_calculate_reward_ig(cell, input_array, update=True) -> float
 _calculate_reward_best_view(new_pov_observed: int, best_next_pov_visited: bool, prev_pos) -> float
 
 # Cell updates
@@ -181,27 +187,14 @@ update_cell(cell: dict, i: int, j: int, update: bool) -> np.ndarray | int
 _get_cell_input_array(cell: dict, observed_indices: list[int]) -> np.ndarray  # (m, 17)
 
 # Observations
-_get_observation() -> np.ndarray  # 3×3×18 flattened
+_get_observation() -> np.ndarray  # 3×3×18 flattened TODO NEVER USED
 _get_observation_double_cnn(extra_pov_radius: int = 8) -> np.ndarray
 _init_observation_space(extra_pov_radius: int = 8) -> None
 ```
 
 ---
 
-## Strategy Notes
 
-### IG-based (model-driven)
-
-- Builds `(m, 17)` input per newly observed POV of each 3×3 neighborhood cell.
-- `base_model(input_array)` → class probabilities; reward is the **expected entropy reduction**.
-- Updates `current_entropy` and sets `marker_pred=1` when argmax matches `MARKER_COUNT`.
-
-### Heuristic “best-view”
-
-- Marks observed POVs, computes `best_next_pov` per cell using `ig_model` or random policy.
-- Reward favors visiting that best next POV soonest.
-
----
 
 ## Quickstart
 
@@ -236,5 +229,36 @@ while True:
 env.close()
 print("Episode reward:", total_reward)
 ```
+
+
+## To review
+Sorted based on the importance 
+1. Index mismatch btw predicted class and MARKER_COUNT in dataset
+
+    There was an index mismatch issue between the predicted class from the base model and the `MARKER_COUNT` used in _update_cell_state() and _calculate_reward_ig().
+
+    - Based on generated field (with latent size 8 and adding +1 in bins in _generate_latent_field()), the range of field values is (1-8). Then this is used to collect samples from the dataset, specifically making MARKER_COUNT match with field value. Therefore, filtered MARKER_COUNT is also in range (1-8).  
+    - In base model output size is 8 and using "torch.argmax(base_model_pred)" we get value in range (0-7). 
+    - There was a mismatch between the range of values returned by argmax (0-7) and the MARKER_COUNT (1-8). This discrepancy could lead to incorrect updates of the cell state (best_view strategy) and reward calculations(ig strategy). The changes ensure that the comparison is valid by adjusting for this offset.
+
+2. Softmax and IG calculation (helper functions)
+  Raw predictions from base model are logits, so we need to convert them to probabilities using softmax before calculating entropy.
+
+  - In information_gain() applies softmax and sends to entropy() where softmax is applied again. Therefore information gain calculation was incorrect.
+
+  - Small note: in different places base_model output is used directly without softmax (e.g., in _update_cell_state() and _calculate_reward_ig()), which is correct for argmax comparison. but _get_observation_double_cnn() was using F.softmax and helper functions (entropy and information_gain) were applying torch.softmax. Both should be fine, but for consistency of conversion between torch and np arrays, and batch and single sample(e.g. dim=-1 and dim=1) handling, better to standardize it.
+
+3. gym spaces definition for observation space bounds
+  - In _init_observation_space() the observation space was defined with min and max values of 0 and 1, which is not accurate for the actual observation values. The current_entropy can be higher than 1 (up to log2(8)=3 for uniform distribution over 8 classes - 1/8). I don;t know how much gym rely on the defined observation space bounds, better to set more realistic bounds to avoid potential issues. 
+
+4. not used functions
+  - _get_observation() is defined but never used. The environment always uses _get_observation_double_cnn(). Consider removing unused functions to keep the code clean.
+  - _update_neighbor_beliefs() is defined but never used. Consider removing it if not needed.
+
+
+
+
+
+
 
 ---
