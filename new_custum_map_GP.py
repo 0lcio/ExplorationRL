@@ -237,6 +237,11 @@ class GridMappingEnv(gym.Env):
         self.ig_model = ig_model
         self.base_model = base_model
         self.dataset = pd.read_csv(dataset_path)
+
+        print("Costruzione cache del dataset per velocità...")
+        self._build_dataset_cache()
+        print("Cache completata!")
+
         self.device = device
 
         # State per cell
@@ -322,6 +327,17 @@ class GridMappingEnv(gym.Env):
         self.cell_size = self.window_size // self.grid_size
         self.window = None
         self.clock = None
+
+    def _build_dataset_cache(self):
+        """Organizza il dataset in un dizionario per accesso istantaneo."""
+        self.dataset_cache = {}
+        # Raggruppa per le chiavi che usiamo per filtrare
+        grouped = self.dataset.groupby(['IMAGE_ID', 'BOX_COUNT', 'MARKER_COUNT'])
+        
+        for name, group in grouped:
+            # name è una tupla (image_id, box_count, marker_count)
+            # group è il DataFrame contenente solo quelle righe
+            self.dataset_cache[name] = group
 
     # -------------------------
     # env reset
@@ -559,11 +575,14 @@ class GridMappingEnv(gym.Env):
 
     def _get_cell_input_array(self, cell, observed_indices):
         input_list = []
-        filtered_data = self.dataset[
-            (self.dataset["IMAGE_ID"] == cell["id"]['IMAGE_ID']) &
-            (self.dataset["BOX_COUNT"] == cell["id"]['BOX_COUNT']) &
-            (self.dataset["MARKER_COUNT"] == cell["id"]['MARKER_COUNT'])
-            ]
+        
+        # --- VERSIONE VELOCE (CON CACHE) ---
+        # Creiamo la chiave per cercare nel dizionario
+        key = (cell["id"]['IMAGE_ID'], cell["id"]['BOX_COUNT'], cell["id"]['MARKER_COUNT'])
+        
+        # Recuperiamo i dati istantaneamente. Se non esistono, restituisce un DataFrame vuoto.
+        filtered_data = self.dataset_cache.get(key, pd.DataFrame())
+        # -----------------------------------
 
         for pov in observed_indices:
             row = filtered_data[filtered_data["POV_ID"] == pov + 1]
@@ -728,12 +747,13 @@ class GridMappingEnv(gym.Env):
 
     def _update_cell_state(self, cell):
         observed_indices = np.flatnonzero(cell['pov'])
+
         input_list = []
-        filtered_data = self.dataset[
-            (self.dataset["IMAGE_ID"] == cell["id"]['IMAGE_ID']) &
-            (self.dataset["BOX_COUNT"] == cell["id"]['BOX_COUNT']) &
-            (self.dataset["MARKER_COUNT"] == cell["id"]['MARKER_COUNT'])
-        ]
+        
+        # --- VERSIONE VELOCE (CON CACHE) ---
+        key = (cell["id"]['IMAGE_ID'], cell["id"]['BOX_COUNT'], cell["id"]['MARKER_COUNT'])
+        filtered_data = self.dataset_cache.get(key, pd.DataFrame())
+        # -----------------------------------
         
         for pov in observed_indices:
             row = filtered_data[filtered_data["POV_ID"] == pov + 1]
@@ -744,51 +764,51 @@ class GridMappingEnv(gym.Env):
                 input_list.append(np.concatenate((pov_id_hot, dist_prob)))
 
         input_array = np.array(input_list, dtype=np.float32)
+        if input_array.size > 0:
+            input_tensor = torch.tensor(input_array).to(self.device)
+        else:
+            # Se è vuoto, creiamo un tensore vuoto sulla GPU per evitare errori
+            input_tensor = torch.tensor([], device=self.device)
+
         m = input_array.shape[0]
-        
+        # Protezione: se m è 0 (nessun dato trovato), non fare nulla per evitare crash
         if m > 0:
-            for row in input_array:
-                pov_onehot = row[:9]
-                dist_prob = row[9:]
-                y_t = row.copy()
-                a_t = pov_onehot
+            cell['obs'][:m, :] = input_array
 
-                if '_coords' not in cell:
-                    found = False
-                    for rr in range(self.grid_size):
-                        for cc in range(self.grid_size):
-                            if self.state[rr, cc] is cell:
-                                cell['_coords'] = (rr, cc)
-                                found = True
-                                break
-                        if found:
-                            break
+        if len(observed_indices) != 9:
+            if self.strategy == 'pred_random' or self.strategy == "pred_random_agent":
+                next_best_pov = torch.randint(0, 9, (1,)).item()
+            else:
+                # Assicuriamoci che input_tensor non sia vuoto
+                if input_tensor.nelement() > 0:
+                    outputs = self.ig_model(input_tensor)
+                    
+                    # --- FIX KEYERROR ---
+                    # Se la strategia è 'pred_ig_reward', dobbiamo leggere 'pred_entropy'
+                    if self.strategy == 'pred_ig_reward':
+                        target_key = 'pred_entropy'
+                    else:
+                        target_key = self.strategy
+                    
+                    # Controllo di sicurezza: se la chiave non esiste, usiamo 'pred_entropy' di default
+                    if target_key not in outputs:
+                        target_key = 'pred_entropy'
+                        
+                    ig_prediction = outputs[target_key]
+                    # --------------------
+                    
+                    next_best_pov = int(torch.argmin(ig_prediction).item())
+                else:
+                    next_best_pov = -1 
 
-                nx, ny = cell['_coords']
-                cell_idx = self._cell_index(nx, ny)
+            cell['best_next_pov'] = next_best_pov
+        else:
+            cell['best_next_pov'] = -1
 
-                sl = slice(cell_idx * self.dx, (cell_idx + 1) * self.dx)
-                gp_mean_cell = self.global_mean[sl].reshape(1, 1)
-                approx_prec = self.Lambda[sl, sl].squeeze().item()
-                gp_var_cell = 1.0 / max(approx_prec, 1e-9)
-                gp_logvar_cell = torch.tensor(
-                    [[math.log(gp_var_cell)]],
-                    dtype=torch.float32,
-                    device=self.device
-                )
-
-                msg = self.obs_store.step(
-                    cell_idx, y_t, a_t, vis_t=1,
-                    gp_mean_t=gp_mean_cell,
-                    gp_logvar_t=gp_logvar_cell
-                )
-
-                q = msg['q']
-                current_entropy = -(q * (q + 1e-12).log()).sum().detach()
-                cell['current_entropy'] = current_entropy
-                pred_class = torch.argmax(q, dim=1).item() + 1
-                if pred_class == cell['id']['MARKER_COUNT']:
-                    cell['marker_pred'] = 1
+        if input_tensor.nelement() > 0:
+            base_model_pred = self.base_model(input_tensor)
+            if torch.argmax(base_model_pred, 1) == cell["id"]['MARKER_COUNT']:
+                cell['marker_pred'] = 1
     
     def _calculate_reward_best_view(self, new_pov_observed, best_next_pov_visited, prev_pos):
         reward = 0.0

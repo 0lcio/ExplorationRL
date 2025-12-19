@@ -5,8 +5,8 @@ import torch
 from stable_baselines3 import DQN
 from callback import RewardLoggerCallback
 from custumCNN import CustomCNN
-# from custum_map import GridMappingEnv
-from new_custum_map_GP import GridMappingEnv
+from custum_map import GridMappingEnv
+# from new_custum_map_GP import GridMappingEnv
 from doubleCNN import DoubleCNNExtractor
 from helper import save_dict, load_models
 import tqdm as tqdm
@@ -82,17 +82,16 @@ def train(episodes, render, strategy, device, buffer_size=1_000_000):
     os.makedirs(checkpoint_dir, exist_ok=True)
 
     reward_logger = RewardLoggerCallback()
-    # Callback per salvare il modello ogni 10.000 step (puoi cambiare il valore)
     checkpoint_callback = CheckpointCallback(
         save_freq=10_000,
         save_path=checkpoint_dir,
-        name_prefix="dqn_exploration_ig_reward_env_20x20_doubleCNN_expov8_ig_policy_checkpoint"
+        name_prefix=f"dqn_exploration_ig_reward_env_{size}x{size}_doubleCNN_expov8_ig_policy_checkpoint_{current_datetime}"
     )
 
-    # Unisci callback personalizzato e salvataggio
     callback = CallbackList([reward_logger, checkpoint_callback])
     base_model, ig_model = load_models(device)
-    env = create_env(size=20, step=1000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
+
+    env = create_env(size=size, step=3000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
 
     # MlpPolicy: rete completamente connessa (https://stable-baselines3.readthedocs.io/en/master/guide/custom_policy.html)
     # input: obs --> [3, 3, 9, 17] ---> flatten = 1377
@@ -119,15 +118,31 @@ def train(episodes, render, strategy, device, buffer_size=1_000_000):
     #    device=device,
     # )
 
+    # model_dqn = DQN(
+    #     policy=MixedExplorationPolicy,
+    #     env=env,
+    #     policy_kwargs={**policy_kwargs, 'env': env, 'p_ig_start': 1.0, 'p_ig_end': 0.0,
+    #                    'p_ig_decay_steps': 10000, 'strategy': 'entropy'},
+    #     buffer_size=buffer_size,
+    #     device=device,
+    #     verbose=1,
+    # )
+
     model_dqn = DQN(
-        policy=MixedExplorationPolicy,
-        env=env,
-        policy_kwargs={**policy_kwargs, 'env': env, 'p_ig_start': 1.0, 'p_ig_end': 0.0,
-                       'p_ig_decay_steps': 10000, 'strategy': 'entropy'},
-        buffer_size=buffer_size,
-        device=device,
-        verbose=1,
-    )
+    policy=MixedExplorationPolicy,
+    env=env,
+    policy_kwargs={
+        **policy_kwargs, 
+        'env': env, 
+        'p_ig_start': 0.0,    
+        'p_ig_end': 0.0,      
+        'p_ig_decay_steps': 10000, 
+        'strategy': 'entropy'
+    },
+    buffer_size=buffer_size,
+    device=device,
+    verbose=1,
+)
     start_time = time.time()
 
     # prefill_replay_buffer(model_dqn, env, ig_model, steps=1000)
@@ -143,9 +158,9 @@ def train(episodes, render, strategy, device, buffer_size=1_000_000):
     train_data["episode_steps"] = reward_logger.episode_steps
     train_data["training_time_seconds"] = training_time
 
-    save_dict(train_data, f"./data/{dir_path}/train_data_ig_reward_env_50x50_doubleCNN_expov8_ig_policy_{current_datetime}.json")
+    save_dict(train_data, f"./data/{dir_path}/train_data_ig_reward_env_{size}x{size}_doubleCNN_expov8_ig_policy_{current_datetime}.json")
 
-    model_dqn.save(f"./data/{dir_path}/dqn_exploration_ig_reward_env_50x50_doubleCNN_expov8_ig_policy_{current_datetime}")
+    model_dqn.save(f"./data/{dir_path}/dqn_exploration_ig_reward_env_{size}x{size}_doubleCNN_expov8_ig_policy_{current_datetime}")
     print("Stop train")
     del model_dqn
 
@@ -158,12 +173,15 @@ def test(render, strategy, initial_seed=42, num_runs=10):
             _, strategy = strategy.split("_")
         else:
             strategy = 'ig_reward'
-        model_dqn = DQN.load(f"./data/{dir_path}/dqn_exploration_ig_reward_env_20x20_doubleCNN_expov8_ig_policy")
+        model_dqn = DQN.load(f"./data/{dir_path}/dqn_exploration_ig_reward_env_{size}x{size}_doubleCNN_expov8_ig_policy_{current_datetime}")
         model_dqn.policy.p_ig_start = 0
 
     test_data = defaultdict(list)
-    base_model, ig_model = load_models()
-    env = create_env(size=20, step=1000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
+    use_cuda = torch.cuda.is_available()
+    device = "cuda" if use_cuda else "cpu"
+    base_model, ig_model = load_models(device)
+
+    env = create_env(size=size, step=3000, base_model=base_model, ig_model=ig_model, render=render, strategy=strategy)
 
 
     # Lista per tenere traccia delle metriche per ogni run
@@ -251,12 +269,12 @@ def test(render, strategy, initial_seed=42, num_runs=10):
     test_data["total_steps_per_run"] = total_steps_per_run
     test_data["total_position_per_run"] = total_position_per_run
 
-    save_dict(test_data, f"./data/{dir_path}/test_data_ig_reward_env_20x20_doubleCNN_expov8_ig_policy.json")
+    save_dict(test_data, f"./data/{dir_path}/test_data_ig_reward_env_{size}x{size}_doubleCNN_expov8_ig_policy_{current_datetime}.json")
 
 
 current_datetime = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 strategy = sys.argv[1]
-
+size = 200
 use_cuda = torch.cuda.is_available()
 device = "cuda" if use_cuda else "cpu"
 

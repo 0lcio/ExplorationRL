@@ -79,8 +79,22 @@ def load_models(device):
     base_model = netCounterBase(NUM_CLASSES_BASE, INPUT_SIZE, HIDDEN_SIZE, NUM_LAYERS)
     ig_model = NetIG(NUM_CLASSES_IG, INPUT_SIZE, HIDDEN_SIZE, NUM_LAYERS)
 
-    base_model_path = os.path.join('data', 'fold_1_saved_base_model.pth')
-    ig_model_path = os.path.join('data', 'fold_1_saved_ig_model_global_MSE_entropy_loss_head.pth')
+    # --------------------------------------------------
+    
+    # CASO 1: BILANCIATO 
+    base_model_path = os.path.join('data', 'balanced.pth')
+    ig_model_path = os.path.join('data', 'ig_model_balanced.pth')
+
+    # CASO 2: SBILANCIATO 80-20
+    # base_model_path = os.path.join('data', '80-20.pth')
+    # ig_model_path = os.path.join('data', 'ig_model_80_20.pth')
+
+    # CASO 3: SBILANCIATO 20-80
+    # base_model_path = os.path.join('data', '20-80.pth')
+    # ig_model_path = os.path.join('data', 'ig_model_20_80.pth')
+    
+    # --------------------------------------------------
+
     if torch.cuda.is_available():
         base_model.load_state_dict(torch.load(base_model_path, map_location=torch.device('cuda'), weights_only=True))
         ig_model.load_state_dict(torch.load(ig_model_path, map_location=torch.device('cuda'), weights_only=True))
